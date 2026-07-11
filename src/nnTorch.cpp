@@ -34,6 +34,8 @@ struct MLPImpl : torch::nn::Module {
     case 0: h = torch::relu(h); break;
     case 1: h = torch::softplus(h); break;
     case 2: h = torch::tanh(h); break;
+    case 3: h = torch::gelu(h); break;          // exact (erf) GELU
+    case 4: h = torch::silu(h); break;          // SiLU / Swish
     default: break;
     }
     return l2->forward(h);

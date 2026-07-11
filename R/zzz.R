@@ -7,16 +7,13 @@
 }
 
 .nnTransRows <- function() {
+  ## probe helpers + the generated nn<K> family (.nnGenNames/.nnGenNargs, R/nnGen.R)
+  .rxFun <- c("nnprobe", "nnnpars", .nnGenNames)
+  .nargs <- c(2L, 1L, .nnGenNargs)
   data.frame(
-    rxFun = c("nnprobe", "nnnpars",
-              "nn1", "nn1_d1", "nn1_d1_d1",
-              "nn2", "nn2_d1", "nn2_d2",
-              "nn2_d1_d1", "nn2_d1_d2", "nn2_d2_d2"),
-    type = c("rxode2_fn2", "rxode2_fn",
-             "rxode2_fn2", "rxode2_fn2", "rxode2_fn2",
-             "rxode2_fn3", "rxode2_fn3", "rxode2_fn3",
-             "rxode2_fn3", "rxode2_fn3", "rxode2_fn3"),
-    nargs = c(2L, 1L, 2L, 2L, 2L, 3L, 3L, 3L, 3L, 3L, 3L),
+    rxFun = .rxFun,
+    type  = paste0("rxode2_fn", ifelse(.nargs == 1L, "", as.character(.nargs))),
+    nargs = .nargs,
     stringsAsFactors = FALSE
   )
 }
@@ -42,24 +39,9 @@
   rxD("nnprobe", list(function(idx, x) "0.0", function(idx, x) "0.0"))
   rxD("nnnpars", list(function(x) "0.0"))
 
-  ## nn1: d/dx1 -> nn1_d1 ; d2/dx1^2 -> nn1_d1_d1
-  ## (first arg `id` is a constant -> non-differentiable, NULL)
-  rxD("nn1", list(NULL,
-    function(id, x1) paste0("nn1_d1(", id, ",", x1, ")")))
-  rxD("nn1_d1", list(NULL,
-    function(id, x1) paste0("nn1_d1_d1(", id, ",", x1, ")")))
-
-  ## nn2: gradient w.r.t. each input
-  rxD("nn2", list(NULL,
-    function(id, x1, x2) paste0("nn2_d1(", id, ",", x1, ",", x2, ")"),
-    function(id, x1, x2) paste0("nn2_d2(", id, ",", x1, ",", x2, ")")))
-  ## Hessian rows (symmetry: d(nn2_d1)/dx2 == d(nn2_d2)/dx1 == nn2_d1_d2)
-  rxD("nn2_d1", list(NULL,
-    function(id, x1, x2) paste0("nn2_d1_d1(", id, ",", x1, ",", x2, ")"),
-    function(id, x1, x2) paste0("nn2_d1_d2(", id, ",", x1, ",", x2, ")")))
-  rxD("nn2_d2", list(NULL,
-    function(id, x1, x2) paste0("nn2_d1_d2(", id, ",", x1, ",", x2, ")"),
-    function(id, x1, x2) paste0("nn2_d2_d2(", id, ",", x1, ",", x2, ")")))
+  ## nn<K> derivative chains (id is a constant -> non-differentiable; d/d input_j
+  ## -> nn<K>_d<j>, second derivs -> nn<K>_d<j>_d<l>).  Generated in R/nnGen.R.
+  .nnGenRegisterD()
   invisible()
 }
 

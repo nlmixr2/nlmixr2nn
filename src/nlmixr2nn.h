@@ -17,6 +17,12 @@ void nlmixr2nnRemoveLoader(nlmixr2nn_parLoader_t cb);
 /* implemented in nnEval.c */
 void nnParLoader(rx_solve *rx, double *gpars, int npars, int ncols);
 void nnSetWeightsC(int id, const double *w, int n);
+double nnForward(int id, const double *x);
+double nnGrad(int id, const double *x, int m);
+double nnHess(int id, const double *x, int m, int l);
+
+/* generated in nnEvalGen.c: registers the nn<K> scalar entry points with rxode2 */
+void nnRegisterCallables(void);
 
 #ifdef __cplusplus
 }

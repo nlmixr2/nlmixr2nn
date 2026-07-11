@@ -16,27 +16,9 @@ extern double nnnpars(double);
 extern SEXP _nlmixr2nn_nnprobe(SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnnpars(SEXP);
 
-/* MLP scalar entry points */
-extern double nn1(double, double);
-extern double nn1_d1(double, double);
-extern double nn1_d1_d1(double, double);
-extern double nn2(double, double, double);
-extern double nn2_d1(double, double, double);
-extern double nn2_d2(double, double, double);
-extern double nn2_d1_d1(double, double, double);
-extern double nn2_d1_d2(double, double, double);
-extern double nn2_d2_d2(double, double, double);
-
-/* SEXP wrappers */
-extern SEXP _nlmixr2nn_nn1(SEXP, SEXP);
-extern SEXP _nlmixr2nn_nn1_d1(SEXP, SEXP);
-extern SEXP _nlmixr2nn_nn1_d1_d1(SEXP, SEXP);
-extern SEXP _nlmixr2nn_nn2(SEXP, SEXP, SEXP);
-extern SEXP _nlmixr2nn_nn2_d1(SEXP, SEXP, SEXP);
-extern SEXP _nlmixr2nn_nn2_d2(SEXP, SEXP, SEXP);
-extern SEXP _nlmixr2nn_nn2_d1_d1(SEXP, SEXP, SEXP);
-extern SEXP _nlmixr2nn_nn2_d1_d2(SEXP, SEXP, SEXP);
-extern SEXP _nlmixr2nn_nn2_d2_d2(SEXP, SEXP, SEXP);
+/* nn<K> scalar entry points are code-generated (nnEvalGen.c) and registered via
+   nnRegisterCallables(); direct R evaluation goes through one dispatcher. */
+extern SEXP _nlmixr2nn_nnEval(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnSetMeta(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnSetWeights(SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnClearMeta(void);
@@ -64,15 +46,7 @@ void R_init_nlmixr2nn(DllInfo *dll) {
   static const R_CallMethodDef callMethods[] = {
     {"_nlmixr2nn_nnprobe",    (DL_FUNC) &_nlmixr2nn_nnprobe,    2},
     {"_nlmixr2nn_nnnpars",    (DL_FUNC) &_nlmixr2nn_nnnpars,    1},
-    {"_nlmixr2nn_nn1",        (DL_FUNC) &_nlmixr2nn_nn1,        2},
-    {"_nlmixr2nn_nn1_d1",     (DL_FUNC) &_nlmixr2nn_nn1_d1,     2},
-    {"_nlmixr2nn_nn1_d1_d1",  (DL_FUNC) &_nlmixr2nn_nn1_d1_d1,  2},
-    {"_nlmixr2nn_nn2",        (DL_FUNC) &_nlmixr2nn_nn2,        3},
-    {"_nlmixr2nn_nn2_d1",     (DL_FUNC) &_nlmixr2nn_nn2_d1,     3},
-    {"_nlmixr2nn_nn2_d2",     (DL_FUNC) &_nlmixr2nn_nn2_d2,     3},
-    {"_nlmixr2nn_nn2_d1_d1",  (DL_FUNC) &_nlmixr2nn_nn2_d1_d1,  3},
-    {"_nlmixr2nn_nn2_d1_d2",  (DL_FUNC) &_nlmixr2nn_nn2_d1_d2,  3},
-    {"_nlmixr2nn_nn2_d2_d2",  (DL_FUNC) &_nlmixr2nn_nn2_d2_d2,  3},
+    {"_nlmixr2nn_nnEval",     (DL_FUNC) &_nlmixr2nn_nnEval,     5},
     {"_nlmixr2nn_nnSetMeta",  (DL_FUNC) &_nlmixr2nn_nnSetMeta,  5},
     {"_nlmixr2nn_nnSetWeights",(DL_FUNC) &_nlmixr2nn_nnSetWeights, 2},
     {"_nlmixr2nn_nnClearMeta",(DL_FUNC) &_nlmixr2nn_nnClearMeta,0},
@@ -107,15 +81,7 @@ void R_init_nlmixr2nn(DllInfo *dll) {
      generated model code (see the mm vignette). */
   R_RegisterCCallable("nlmixr2nn", "nnprobe",   (DL_FUNC) &nnprobe);
   R_RegisterCCallable("nlmixr2nn", "nnnpars",   (DL_FUNC) &nnnpars);
-  R_RegisterCCallable("nlmixr2nn", "nn1",       (DL_FUNC) &nn1);
-  R_RegisterCCallable("nlmixr2nn", "nn1_d1",    (DL_FUNC) &nn1_d1);
-  R_RegisterCCallable("nlmixr2nn", "nn1_d1_d1", (DL_FUNC) &nn1_d1_d1);
-  R_RegisterCCallable("nlmixr2nn", "nn2",       (DL_FUNC) &nn2);
-  R_RegisterCCallable("nlmixr2nn", "nn2_d1",    (DL_FUNC) &nn2_d1);
-  R_RegisterCCallable("nlmixr2nn", "nn2_d2",    (DL_FUNC) &nn2_d2);
-  R_RegisterCCallable("nlmixr2nn", "nn2_d1_d1", (DL_FUNC) &nn2_d1_d1);
-  R_RegisterCCallable("nlmixr2nn", "nn2_d1_d2", (DL_FUNC) &nn2_d1_d2);
-  R_RegisterCCallable("nlmixr2nn", "nn2_d2_d2", (DL_FUNC) &nn2_d2_d2);
+  nnRegisterCallables();   /* nn<K> family, generated in nnEvalGen.c */
 }
 
 /* Register the par-loader hook with rxode2; called from .onLoad after the

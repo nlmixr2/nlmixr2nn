@@ -39,7 +39,8 @@ rxUdfUi.nn <- function(fun) {
 #'   `NULL`.
 #' @return a list consumed by [rxode2::rxUdfUi()] (`replace`, `before`, `iniDf`).
 #' @export
-nn <- function(..., n_hidden = 5L, act = c("relu", "softplus", "tanh"),
+nn <- function(..., n_hidden = 5L,
+               act = c("relu", "softplus", "tanh", "gelu", "silu"),
                sd = 0.1, num = NULL, iniDf = NULL) {
   act <- match.arg(act)
   ## capture positional inputs symbolically (do NOT evaluate them)

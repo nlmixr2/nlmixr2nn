@@ -1,74 +1,19 @@
-## Activation code mapping shared with src/nnEval.c (0=ReLU, 1=Softplus, 2=tanh)
-.nnActCode <- c(relu = 0L, softplus = 1L, tanh = 2L)
+## Activation code mapping shared with src/nnEval.c and MLPImpl in nnTorch.cpp
+.nnActCode <- c(relu = 0L, softplus = 1L, tanh = 2L, gelu = 3L, silu = 4L)
 
-## R-level entry points for the compiled MLP functions.  These mirror the
-## rxode2 model-code names one-to-one: rxode2's symengine->rxode2 renderer
-## resolves a registered function by get()-ing an R function of the same name
-## and arity, so every model/derivative name must exist here (as with the mm
-## example package).  They also let the functions be called directly from R.
-
-#' Single-hidden-layer neural-network ODE function and its input derivatives
-#'
-#' `nn<K>(id, x1, ...)` evaluates the registered network `id` (see
-#' [nnSetMeta()]) at the `K` inputs, reading its weights from the current solve
-#' parameter vector.  The `_d<j>` / `_d<j>_d<l>` variants give the first and
-#' second derivatives with respect to the inputs.
-#'
-#' @param id integer network id (matches [nnSetMeta()]).
-#' @param x1,x2 network inputs.
-#' @return numeric vector.
-#' @export
-nn1 <- function(id, x1) {
-  d <- data.frame(id = id, x1 = x1)
-  .Call(`_nlmixr2nn_nn1`, as.double(d$id), as.double(d$x1))
-}
-#' @rdname nn1
-#' @export
-nn1_d1 <- function(id, x1) {
-  d <- data.frame(id = id, x1 = x1)
-  .Call(`_nlmixr2nn_nn1_d1`, as.double(d$id), as.double(d$x1))
-}
-#' @rdname nn1
-#' @export
-nn1_d1_d1 <- function(id, x1) {
-  d <- data.frame(id = id, x1 = x1)
-  .Call(`_nlmixr2nn_nn1_d1_d1`, as.double(d$id), as.double(d$x1))
-}
-#' @rdname nn1
-#' @export
-nn2 <- function(id, x1, x2) {
-  d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_nlmixr2nn_nn2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
-}
-#' @rdname nn1
-#' @export
-nn2_d1 <- function(id, x1, x2) {
-  d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_nlmixr2nn_nn2_d1`, as.double(d$id), as.double(d$x1), as.double(d$x2))
-}
-#' @rdname nn1
-#' @export
-nn2_d2 <- function(id, x1, x2) {
-  d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_nlmixr2nn_nn2_d2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
-}
-#' @rdname nn1
-#' @export
-nn2_d1_d1 <- function(id, x1, x2) {
-  d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_nlmixr2nn_nn2_d1_d1`, as.double(d$id), as.double(d$x1), as.double(d$x2))
-}
-#' @rdname nn1
-#' @export
-nn2_d1_d2 <- function(id, x1, x2) {
-  d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_nlmixr2nn_nn2_d1_d2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
-}
-#' @rdname nn1
-#' @export
-nn2_d2_d2 <- function(id, x1, x2) {
-  d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_nlmixr2nn_nn2_d2_d2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
+## Dispatcher for the generated nn<K>* R wrappers (R/nnGen.R).  Vectorizes over
+## the input columns; kind 0 = forward, 1 = gradient(j), 2 = Hessian(j,l).  The
+## generated wrappers exist so rxode2's symengine->rxode2 renderer can resolve
+## each model/derivative name by get()-ing an R function of the right arity (as
+## with the mm example package), and to allow direct R evaluation.
+.nnEvalR <- function(id, kind, j, l, ...) {
+  m <- cbind(...)
+  storage.mode(m) <- "double"
+  id <- as.integer(id[1]); kind <- as.integer(kind)
+  j <- as.integer(j); l <- as.integer(l)
+  vapply(seq_len(nrow(m)),
+         function(i) .Call(`_nlmixr2nn_nnEval`, id, m[i, ], kind, j, l),
+         numeric(1))
 }
 
 #' Register a network's weight-block layout for solving

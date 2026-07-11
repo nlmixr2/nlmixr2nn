@@ -16,4 +16,4 @@ SystemRequirements: libtorch (via the 'torch' R package; C++17)
 Suggests: nlmixr2, nlmixr2est, numDeriv, torch, testthat (>= 3.0.0)
 NeedsCompilation: yes
 Config/testthat/edition: 3
-RoxygenNote: 7.3.2
+Config/roxygen2/version: 8.0.0

@@ -62,12 +62,18 @@ static rx_solve *nnGetRx(void) {
   return nlmixr2nnGetRxSolve();   /* NULL until the table is installed */
 }
 
+/* activation codes (keep in sync with .nnActCode in R and MLPImpl in nnTorch.cpp):
+   0 ReLU, 1 Softplus, 2 tanh, 3 GELU (exact/erf), 4 SiLU (Swish) */
+#define NN_INV_SQRT_2PI 0.3989422804014327  /* 1/sqrt(2*pi) */
+
 /* activation and its first two derivatives w.r.t. the pre-activation z */
 static inline double nnAct(int act, double z) {
   switch (act) {
   case 0: return z > 0 ? z : 0.0;                 /* ReLU */
   case 1: return z > 0 ? z + log1p(exp(-z)) : log1p(exp(z)); /* Softplus, stable */
   case 2: return tanh(z);
+  case 3: return 0.5 * z * (1.0 + erf(z * M_SQRT1_2));       /* GELU */
+  case 4: return z / (1.0 + exp(-z));                        /* SiLU / Swish */
   default: return z;
   }
 }
@@ -76,6 +82,10 @@ static inline double nnActD(int act, double z) {
   case 0: return z > 0 ? 1.0 : 0.0;
   case 1: return 1.0 / (1.0 + exp(-z));           /* logistic */
   case 2: { double t = tanh(z); return 1.0 - t * t; }
+  case 3: { double Phi = 0.5 * (1.0 + erf(z * M_SQRT1_2));
+            double phi = exp(-0.5 * z * z) * NN_INV_SQRT_2PI;
+            return Phi + z * phi; }
+  case 4: { double s = 1.0 / (1.0 + exp(-z)); return s * (1.0 + z * (1.0 - s)); }
   default: return 1.0;
   }
 }
@@ -84,6 +94,10 @@ static inline double nnActD2(int act, double z) {
   case 0: return 0.0;
   case 1: { double s = 1.0 / (1.0 + exp(-z)); return s * (1.0 - s); }
   case 2: { double t = tanh(z); return -2.0 * t * (1.0 - t * t); }
+  case 3: { double phi = exp(-0.5 * z * z) * NN_INV_SQRT_2PI;
+            return phi * (2.0 - z * z); }
+  case 4: { double s = 1.0 / (1.0 + exp(-z)); double s1 = s * (1.0 - s);
+            return 2.0 * s1 + z * s1 * (1.0 - 2.0 * s); }
   default: return 0.0;
   }
 }
@@ -99,7 +113,7 @@ static const double *nnWeights(int id, int *K, int *H, int *act) {
 }
 
 /* forward value; x has length K */
-static double nnForward(int id, const double *x) {
+double nnForward(int id, const double *x) {
   int K, H, act;
   const double *w = nnWeights(id, &K, &H, &act);
   if (w == NULL) return NA_REAL;
@@ -117,7 +131,7 @@ static double nnForward(int id, const double *x) {
 }
 
 /* d out / d x_m */
-static double nnGrad(int id, const double *x, int m) {
+double nnGrad(int id, const double *x, int m) {
   int K, H, act;
   const double *w = nnWeights(id, &K, &H, &act);
   if (w == NULL) return NA_REAL;
@@ -134,7 +148,7 @@ static double nnGrad(int id, const double *x, int m) {
 }
 
 /* d2 out / d x_m d x_l */
-static double nnHess(int id, const double *x, int m, int l) {
+double nnHess(int id, const double *x, int m, int l) {
   int K, H, act;
   const double *w = nnWeights(id, &K, &H, &act);
   if (w == NULL) return NA_REAL;
@@ -150,45 +164,9 @@ static double nnHess(int id, const double *x, int m, int l) {
   return h;
 }
 
-/* ---- fixed-arity rxode2 entry points (id is the first argument) ---------- */
-/* K = 1 */
-double nn1(double id, double x1) {
-  double x[1] = {x1};
-  return nnForward((int) id, x);
-}
-double nn1_d1(double id, double x1) {
-  double x[1] = {x1};
-  return nnGrad((int) id, x, 0);
-}
-double nn1_d1_d1(double id, double x1) {
-  double x[1] = {x1};
-  return nnHess((int) id, x, 0, 0);
-}
-/* K = 2 */
-double nn2(double id, double x1, double x2) {
-  double x[2] = {x1, x2};
-  return nnForward((int) id, x);
-}
-double nn2_d1(double id, double x1, double x2) {
-  double x[2] = {x1, x2};
-  return nnGrad((int) id, x, 0);
-}
-double nn2_d2(double id, double x1, double x2) {
-  double x[2] = {x1, x2};
-  return nnGrad((int) id, x, 1);
-}
-double nn2_d1_d1(double id, double x1, double x2) {
-  double x[2] = {x1, x2};
-  return nnHess((int) id, x, 0, 0);
-}
-double nn2_d1_d2(double id, double x1, double x2) {
-  double x[2] = {x1, x2};
-  return nnHess((int) id, x, 0, 1);
-}
-double nn2_d2_d2(double id, double x1, double x2) {
-  double x[2] = {x1, x2};
-  return nnHess((int) id, x, 1, 1);
-}
+/* The fixed-arity rxode2 entry points nn<K> / nn<K>_d<j> / nn<K>_d<j>_d<l>
+   (for K = 1..NN_KMAX) are code-generated in nnEvalGen.c and call nnForward /
+   nnGrad / nnHess above. */
 
 /* ---- registry management (called from R) --------------------------------- */
 SEXP _nlmixr2nn_nnSetMeta(SEXP id, SEXP base, SEXP K, SEXP H, SEXP act) {
@@ -241,29 +219,17 @@ SEXP _nlmixr2nn_nnClearMeta(void) {
   return ScalarLogical(1);
 }
 
-/* SEXP wrappers so the functions are also callable directly from R for tests */
-#define NN_WRAP2(nm)                                            \
-  SEXP _nlmixr2nn_##nm(SEXP id, SEXP x1) {                       \
-    int n = LENGTH(x1);                                         \
-    SEXP out = PROTECT(allocVector(REALSXP, n));                \
-    double *pid = REAL(id), *p1 = REAL(x1), *r = REAL(out);     \
-    for (int i = 0; i < n; i++) r[i] = nm(pid[i], p1[i]);       \
-    UNPROTECT(1); return out;                                   \
-  }
-#define NN_WRAP3(nm)                                                    \
-  SEXP _nlmixr2nn_##nm(SEXP id, SEXP x1, SEXP x2) {                      \
-    int n = LENGTH(x1);                                                 \
-    SEXP out = PROTECT(allocVector(REALSXP, n));                        \
-    double *pid = REAL(id), *p1 = REAL(x1), *p2 = REAL(x2), *r = REAL(out); \
-    for (int i = 0; i < n; i++) r[i] = nm(pid[i], p1[i], p2[i]);        \
-    UNPROTECT(1); return out;                                           \
-  }
-NN_WRAP2(nn1)
-NN_WRAP2(nn1_d1)
-NN_WRAP2(nn1_d1_d1)
-NN_WRAP3(nn2)
-NN_WRAP3(nn2_d1)
-NN_WRAP3(nn2_d2)
-NN_WRAP3(nn2_d1_d1)
-NN_WRAP3(nn2_d1_d2)
-NN_WRAP3(nn2_d2_d2)
+/* Single dispatcher for direct R evaluation (the R nn<K>* functions call this):
+   kind 0 = forward, 1 = gradient w.r.t. input j, 2 = Hessian w.r.t. inputs j,l.
+   x is the length-K input vector; id/kind/j/l are scalars. */
+SEXP _nlmixr2nn_nnEval(SEXP id, SEXP x, SEXP kind, SEXP j, SEXP l) {
+  int i = asInteger(id), K = LENGTH(x), knd = asInteger(kind);
+  int jj = asInteger(j), ll = asInteger(l);
+  double *px = REAL(x);
+  double val;
+  if (knd == 1) val = nnGrad(i, px, jj);
+  else if (knd == 2) val = nnHess(i, px, jj, ll);
+  else val = nnForward(i, px);
+  (void) K;
+  return ScalarReal(val);
+}
