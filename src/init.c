@@ -10,6 +10,12 @@
 extern SEXP _nlmixr2nn_iniRxodePtrs(SEXP);
 SEXP _nlmixr2nn_registerLoader(void);
 
+/* nlmixr2est likelihood-contribution bundle (nlmixr2nnContrib.c) */
+extern SEXP _nlmixr2nn_iniLikContrib(SEXP);
+extern SEXP _nlmixr2nn_registerContrib(void);
+extern SEXP _nlmixr2nn_removeContrib(void);
+extern SEXP _nlmixr2nn_getContrib(void);
+
 /* probe (validation) */
 extern double nnprobe(double, double);
 extern double nnnpars(double);
@@ -53,6 +59,10 @@ void R_init_nlmixr2nn(DllInfo *dll) {
     {"_nlmixr2nn_nnUnregisterLoader",(DL_FUNC) &_nlmixr2nn_nnUnregisterLoader,0},
     {"_nlmixr2nn_iniRxodePtrs",(DL_FUNC) &_nlmixr2nn_iniRxodePtrs,1},
     {"_nlmixr2nn_registerLoader",(DL_FUNC) &_nlmixr2nn_registerLoader,0},
+    {"_nlmixr2nn_iniLikContrib",(DL_FUNC) &_nlmixr2nn_iniLikContrib,1},
+    {"_nlmixr2nn_registerContrib",(DL_FUNC) &_nlmixr2nn_registerContrib,0},
+    {"_nlmixr2nn_removeContrib",(DL_FUNC) &_nlmixr2nn_removeContrib,0},
+    {"_nlmixr2nn_getContrib",(DL_FUNC) &_nlmixr2nn_getContrib,0},
     {"_nlmixr2nn_nnTorchProbe",(DL_FUNC) &_nlmixr2nn_nnTorchProbe,1},
     {"_nlmixr2nn_nnTorchAvailable",(DL_FUNC) &_nlmixr2nn_nnTorchAvailable,0},
     {"_nlmixr2nn_nnTorchInit",(DL_FUNC) &_nlmixr2nn_nnTorchInit,5},

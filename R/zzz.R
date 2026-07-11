@@ -4,6 +4,18 @@
   .Call(`_nlmixr2nn_iniRxodePtrs`, rxode2::.rxode2ptrs(), PACKAGE = "nlmixr2nn")
   .Call(`_nlmixr2nn_registerLoader`, PACKAGE = "nlmixr2nn")
   .registerRxode2()
+  ## install nlmixr2est's likelihood-contribution registry (if available) and
+  ## register the neural-network contribution bundle so nn weights get their
+  ## objective cotangents during estimation.  Soft dependency: nn() still solves
+  ## and simulates without nlmixr2est.
+  if (requireNamespace("nlmixr2est", quietly = TRUE) &&
+      exists(".nlmixr2estLikContribPtrs", envir = asNamespace("nlmixr2est"))) {
+    .p <- try(nlmixr2est:::.nlmixr2estLikContribPtrs(), silent = TRUE)
+    if (!inherits(.p, "try-error")) {
+      .Call(`_nlmixr2nn_iniLikContrib`, .p, PACKAGE = "nlmixr2nn")
+      .Call(`_nlmixr2nn_registerContrib`, PACKAGE = "nlmixr2nn")
+    }
+  }
 }
 
 .nnTransRows <- function() {
@@ -55,7 +67,8 @@
   for (.nm in .nnTransRows()$rxFun) {
     suppressWarnings(try(rxRmFun(.nm), silent = TRUE))
   }
-  ## drop the par-loader hook from rxode2 before unloading our DLL
+  ## drop the par-loader hook + likelihood contribution before unloading our DLL
   try(.Call(`_nlmixr2nn_nnUnregisterLoader`), silent = TRUE)
+  try(.Call(`_nlmixr2nn_removeContrib`), silent = TRUE)
   library.dynam.unload("nlmixr2nn", libpath)
 }
