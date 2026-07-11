@@ -1,4 +1,8 @@
 .onLoad <- function(libname, pkgname) {
+  ## install rxode2's C entry points into this package's function-pointer
+  ## globals, then register the par-loader hook (both need the table populated)
+  .Call(`_rxode2nn_iniRxodePtrs`, rxode2::.rxode2ptrs(), PACKAGE = "rxode2nn")
+  .Call(`_rxode2nn_registerLoader`, PACKAGE = "rxode2nn")
   .registerRxode2()
 }
 

@@ -3,11 +3,12 @@
 #include <Rinternals.h>
 #include <R_ext/Rdynload.h>
 #include <stdlib.h>
-#include <rxode2parseStruct.h>
+#include <rxode2parseStruct.h>   /* rx_solve (C-safe) */
+#include "rxode2nn.h"            /* nnParLoader + C bridge wrappers */
 
-/* par-loader hook registered with rxode2 */
-extern void nnParLoader(rx_solve *rx, double *gpars, int npars, int ncols);
-typedef void (*t_rxParLoader)(rx_solve *rx, double *gpars, int npars, int ncols);
+/* rxode2 function-pointer-table installer (defined in rxode2nnPtr.cpp) */
+extern SEXP _rxode2nn_iniRxodePtrs(SEXP);
+SEXP _rxode2nn_registerLoader(void);
 
 /* probe (validation) */
 extern double nnprobe(double, double);
@@ -70,6 +71,8 @@ void R_init_rxode2nn(DllInfo *dll) {
     {"_rxode2nn_nnSetWeights",(DL_FUNC) &_rxode2nn_nnSetWeights, 2},
     {"_rxode2nn_nnClearMeta",(DL_FUNC) &_rxode2nn_nnClearMeta,0},
     {"_rxode2nn_nnUnregisterLoader",(DL_FUNC) &_rxode2nn_nnUnregisterLoader,0},
+    {"_rxode2nn_iniRxodePtrs",(DL_FUNC) &_rxode2nn_iniRxodePtrs,1},
+    {"_rxode2nn_registerLoader",(DL_FUNC) &_rxode2nn_registerLoader,0},
     {"_rxode2nn_nnTorchProbe",(DL_FUNC) &_rxode2nn_nnTorchProbe,1},
     {"_rxode2nn_nnTorchAvailable",(DL_FUNC) &_rxode2nn_nnTorchAvailable,0},
     {"_rxode2nn_nnTorchInit",(DL_FUNC) &_rxode2nn_nnTorchInit,5},
@@ -85,13 +88,11 @@ void R_init_rxode2nn(DllInfo *dll) {
   R_registerRoutines(dll, NULL, callMethods, NULL, NULL);
   R_useDynamicSymbols(dll, FALSE);
 
-  /* register the parameter-block loader hook with rxode2 */
-  {
-    void (*regFn)(t_rxParLoader) =
-      (void (*)(t_rxParLoader)) R_GetCCallable("rxode2", "rxRegisterParLoader");
-    regFn(nnParLoader);
-  }
-
+  /* NB: the par-loader hook is registered from .onLoad (_rxode2nn_registerLoader),
+     after the rxode2 pointer table is installed -- the rxRegisterParLoader
+     pointer is NULL at R_init time.  The nn<K> functions below stay on
+     R_RegisterCCallable: that is rxode2's custom-function resolution path used by
+     generated model code (see the mm vignette). */
   R_RegisterCCallable("rxode2nn", "nnprobe",   (DL_FUNC) &nnprobe);
   R_RegisterCCallable("rxode2nn", "nnnpars",   (DL_FUNC) &nnnpars);
   R_RegisterCCallable("rxode2nn", "nn1",       (DL_FUNC) &nn1);
@@ -105,10 +106,16 @@ void R_init_rxode2nn(DllInfo *dll) {
   R_RegisterCCallable("rxode2nn", "nn2_d2_d2", (DL_FUNC) &nn2_d2_d2);
 }
 
+/* Register the par-loader hook with rxode2; called from .onLoad after the
+   rxode2 pointer table is installed (so rxRegisterParLoader is non-NULL). */
+SEXP _rxode2nn_registerLoader(void) {
+  rxode2nnRegisterLoader(nnParLoader);
+  return R_NilValue;
+}
+
 /* Called from .onUnload before the DLL is removed, so rxode2 does not retain a
    dangling pointer to nnParLoader. */
 SEXP _rxode2nn_nnUnregisterLoader(void) {
-  DL_FUNC rmFn = R_GetCCallable("rxode2", "rxRemoveParLoader");
-  if (rmFn != NULL) ((void (*)(t_rxParLoader)) rmFn)(nnParLoader);
+  rxode2nnRemoveLoader(nnParLoader);
   return R_NilValue;
 }

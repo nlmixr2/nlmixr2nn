@@ -4,8 +4,8 @@
 #include <math.h>
 #include <R.h>
 #include <Rinternals.h>
-#include <R_ext/Rdynload.h>
-#include <rxode2parseStruct.h>
+#include <rxode2parseStruct.h>   /* full rx_solve struct (C-safe, no Rcpp) */
+#include "rxode2nn.h"            /* C bridge to rxode2's function-pointer table */
 
 /* Single-hidden-layer MLP evaluated inside an rxode2 ODE right-hand side.
 
@@ -58,12 +58,8 @@ void nnParLoader(rx_solve *rx, double *gpars, int npars, int ncols) {
   }
 }
 
-static rx_solve *(*getRxSolve_fn)(void) = NULL;
 static rx_solve *nnGetRx(void) {
-  if (getRxSolve_fn == NULL) {
-    getRxSolve_fn = (rx_solve *(*)(void)) R_GetCCallable("rxode2", "getRxSolve_");
-  }
-  return getRxSolve_fn();
+  return rxode2nnGetRxSolve();   /* NULL until the table is installed */
 }
 
 /* activation and its first two derivatives w.r.t. the pre-activation z */
