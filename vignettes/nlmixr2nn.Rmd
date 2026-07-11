@@ -1,0 +1,107 @@
+---
+title: "Neural-network ODEs with nlmixr2nn"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Neural-network ODEs with nlmixr2nn}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+.hasRx    <- requireNamespace("rxode2", quietly = TRUE)
+.hasTorch <- .hasRx &&
+  tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
+```
+
+## What nlmixr2nn does
+
+`nlmixr2nn` lets you drop a neural network into an ODE right-hand side for
+`rxode2`/`nlmixr2`. It extends the idea of `pmxNODE`, but instead of expanding
+every weight into explicit model algebra (which does not scale), the network is
+an **opaque, compiled function**: the model text stays O(1) in the network size,
+the value and its analytic input derivatives are computed in fast thread-safe C,
+and a C++ `libtorch` module owns and trains the weights.
+
+The network is written with the lower-case `nn()` function (upper-case `NN()` is
+`pmxNODE`):
+
+```{r, eval = .hasRx}
+library(nlmixr2nn)
+
+mod <- function() {
+  ini({
+    lka <- 0.5
+    lVc <- 1
+  })
+  model({
+    ka <- exp(lka)
+    Vc <- exp(lVc)
+    d/dt(depot)   <- -ka * depot
+    ## a 6-unit softplus network of the central amount enters the elimination
+    d/dt(central) <-  ka * depot - nn(central, n_hidden = 6, act = "softplus")
+    cp <- central / Vc
+  })
+}
+ui <- rxode2::rxode2(mod)
+```
+
+At parse time `nn(central, ...)` is replaced by a single compiled call and the
+network weights are added as randomly-initialized parameters:
+
+```{r, eval = .hasRx}
+cat(paste(vapply(ui$lstExpr, deparse1, character(1)), collapse = "\n"))
+```
+
+## Solving with a torch module
+
+Create a `libtorch` module for each network in the model, register the weight
+layout, and solve. `nnTorchModel()` builds the modules; `nnUpdate()` resolves
+where each network's weights live in the solve parameter vector and syncs the
+module weights into the loader buffer that the rxode2 hook injects each solve.
+
+```{r, eval = .hasTorch}
+nnTorchModel(ui, seed = 1)   # C++ torch module for network 0
+nnUpdate(ui)                 # register layout + sync weights
+
+ev <- rxode2::et(amt = 100, cmt = "depot") |> rxode2::et(0, 24, by = 4)
+head(rxode2::rxSolve(ui, ev))
+```
+
+## Training the network
+
+The weights are trained by torch, not by nlmixr2's optimizer. The gradient
+bridge turns a cotangent on the network output into `d(loss)/d(weights)` via
+torch autograd and steps a torch optimizer. `nnTorchTrain()` demonstrates this
+with an explicit L2 target (in a full fit the cotangent comes from the
+likelihood instead):
+
+```{r, eval = .hasTorch}
+id <- 7L
+nnTorchInit(id, K = 1L, H = 12L, act = "gelu", seed = 3)
+X <- matrix(seq(-2, 2, length.out = 41), ncol = 1)
+loss <- nnTorchTrain(id, X, target = sin(X), steps = 400L, lr = 0.05)
+c(first = loss[1], last = tail(loss, 1))
+```
+
+## Inputs and activations
+
+The compiled family supports input dimensions `K = 1..4` -- pass several states
+positionally, e.g. `nn(central, t)` -- and the activations `"relu"`,
+`"softplus"`, `"tanh"`, `"gelu"`, and `"silu"`. Value, input gradient, and input
+Hessian are analytic in every case.
+
+## Saving and restoring a trained network
+
+A trained module serializes to a binary and restores for later simulation:
+
+```{r, eval = .hasTorch}
+f <- tempfile(fileext = ".pt")
+nnTorchSave(id, f)
+nnTorchInit(id, K = 1L, H = 12L, act = "gelu")   # reinitialize (random)
+nnTorchLoad(id, f)                               # restore trained weights
+unlink(f)
+```
+```{r, include = FALSE}
+if (.hasTorch) try(nnTorchFree(id), silent = TRUE)
+```

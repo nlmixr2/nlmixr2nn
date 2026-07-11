@@ -13,7 +13,9 @@ Encoding: UTF-8
 Imports: rxode2, checkmate, stats
 LinkingTo: rxode2, Rcpp
 SystemRequirements: libtorch (via the 'torch' R package; C++17)
-Suggests: nlmixr2, nlmixr2est, numDeriv, torch, testthat (>= 3.0.0)
+Suggests: nlmixr2, nlmixr2est, numDeriv, torch, testthat (>= 3.0.0),
+    knitr, rmarkdown
+VignetteBuilder: knitr
 NeedsCompilation: yes
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0
