@@ -60,11 +60,18 @@ struct MLPImpl : torch::nn::Module {
 TORCH_MODULE(MLP);
 
 static std::map<int, MLP> g_modules;
+static std::map<int, std::shared_ptr<torch::optim::Optimizer>> g_opt;
 
 static MLP &getModule(int id) {
   auto it = g_modules.find(id);
   if (it == g_modules.end()) Rf_error("no torch module registered for nn id %d", id);
   return it->second;
+}
+
+static torch::optim::Optimizer *getOpt(int id) {
+  auto it = g_opt.find(id);
+  if (it == g_opt.end()) Rf_error("no optimizer for nn id %d (call nnTorchOptInit)", id);
+  return it->second.get();
 }
 
 extern "C" {
@@ -134,6 +141,77 @@ SEXP _nlmixr2nn_nnTorchSave(SEXP id, SEXP path) {
 
 SEXP _nlmixr2nn_nnTorchLoad(SEXP id, SEXP path) {
   torch::load(getModule(Rf_asInteger(id)), std::string(CHAR(STRING_ELT(path, 0))));
+  return R_NilValue;
+}
+
+// ---- training (torch owns/updates the weights) ---------------------------
+// type: 0 = SGD, 1 = Adam.  Creates an optimizer over the module parameters.
+SEXP _nlmixr2nn_nnTorchOptInit(SEXP id, SEXP type, SEXP lr) {
+  int i = Rf_asInteger(id);
+  MLP m = getModule(i);
+  double l = Rf_asReal(lr);
+  if (Rf_asInteger(type) == 1) {
+    g_opt[i] = std::make_shared<torch::optim::Adam>(m->parameters(),
+                 torch::optim::AdamOptions(l));
+  } else {
+    g_opt[i] = std::make_shared<torch::optim::SGD>(m->parameters(),
+                 torch::optim::SGDOptions(l));
+  }
+  return R_NilValue;
+}
+
+SEXP _nlmixr2nn_nnTorchZeroGrad(SEXP id) {
+  getOpt(Rf_asInteger(id))->zero_grad();
+  return R_NilValue;
+}
+
+// forward a batch: X is row-major [N x K]; returns y [N]
+SEXP _nlmixr2nn_nnTorchForwardBatch(SEXP id, SEXP X, SEXP Nn, SEXP Kk) {
+  torch::NoGradGuard ng;
+  int N = Rf_asInteger(Nn), K = Rf_asInteger(Kk);
+  torch::Tensor xt = torch::from_blob(REAL(X), {N, K}, torch::kFloat64).clone();
+  torch::Tensor y = getModule(Rf_asInteger(id))->forward(xt).reshape({N});
+  SEXP out = PROTECT(Rf_allocVector(REALSXP, N));
+  std::memcpy(REAL(out), y.contiguous().data_ptr<double>(), (size_t) N * sizeof(double));
+  UNPROTECT(1);
+  return out;
+}
+
+// vector-Jacobian product: accumulate d(sum G*y)/d(w) into the parameter grads.
+// X row-major [N x K]; G [N] is the upstream cotangent d(loss)/d(output).
+SEXP _nlmixr2nn_nnTorchBackward(SEXP id, SEXP X, SEXP G, SEXP Nn, SEXP Kk) {
+  int N = Rf_asInteger(Nn), K = Rf_asInteger(Kk);
+  MLP m = getModule(Rf_asInteger(id));
+  torch::Tensor xt = torch::from_blob(REAL(X), {N, K}, torch::kFloat64).clone();
+  torch::Tensor gt = torch::from_blob(REAL(G), {N, 1}, torch::kFloat64).clone();
+  torch::Tensor y = m->forward(xt);          // [N,1], graph over params
+  y.backward(gt);                            // param.grad += sum_n G_n * dy_n/dw
+  return R_NilValue;
+}
+
+// flattened parameter gradients in nnEval layout order (for gradient checks)
+SEXP _nlmixr2nn_nnTorchGetGrad(SEXP id) {
+  torch::NoGradGuard ng;
+  MLP m = getModule(Rf_asInteger(id));
+  torch::Tensor flat = torch::cat({m->l1->weight.grad().reshape({-1}),
+                                   m->l1->bias.grad(),
+                                   m->l2->weight.grad().reshape({-1}),
+                                   m->l2->bias.grad()}).contiguous().to(torch::kFloat64);
+  int n = (int) flat.numel();
+  SEXP out = PROTECT(Rf_allocVector(REALSXP, n));
+  std::memcpy(REAL(out), flat.data_ptr<double>(), (size_t) n * sizeof(double));
+  UNPROTECT(1);
+  return out;
+}
+
+// optimizer step, then push the updated weights into the loader buffer so the
+// next solve uses them.
+SEXP _nlmixr2nn_nnTorchStep(SEXP id) {
+  int i = Rf_asInteger(id);
+  getOpt(i)->step();
+  torch::NoGradGuard ng;
+  torch::Tensor flat = getModule(i)->flatten();
+  nnSetWeightsC(i, flat.data_ptr<double>(), (int) flat.numel());
   return R_NilValue;
 }
 
