@@ -16,7 +16,7 @@
 #' @export
 nnTorchInit <- function(id, K, H, act = "relu", seed = NULL) {
   act <- match.arg(tolower(act), names(.nnActCode))
-  .Call(`_rxode2nn_nnTorchInit`, as.integer(id), as.integer(K), as.integer(H),
+  .Call(`_nlmixr2nn_nnTorchInit`, as.integer(id), as.integer(K), as.integer(H),
         .nnActCode[[act]], if (is.null(seed)) NULL else as.integer(seed))
   .nnEnv$torchIds <- union(.nnEnv$torchIds, as.integer(id))
   invisible(as.integer(id))
@@ -26,13 +26,13 @@ nnTorchInit <- function(id, K, H, act = "relu", seed = NULL) {
 #' @param id network id.
 #' @return invisibly, the number of weights synced.
 #' @export
-nnTorchSync <- function(id) invisible(.Call(`_rxode2nn_nnTorchSync`, as.integer(id)))
+nnTorchSync <- function(id) invisible(.Call(`_nlmixr2nn_nnTorchSync`, as.integer(id)))
 
 #' Flat weights of a torch module (nnWeightLayout order)
 #' @param id network id.
 #' @return numeric vector.
 #' @export
-nnTorchWeights <- function(id) .Call(`_rxode2nn_nnTorchGetWeights`, as.integer(id))
+nnTorchWeights <- function(id) .Call(`_nlmixr2nn_nnTorchGetWeights`, as.integer(id))
 
 #' Load flat weights into a torch module
 #' @param id network id.
@@ -40,7 +40,7 @@ nnTorchWeights <- function(id) .Call(`_rxode2nn_nnTorchGetWeights`, as.integer(i
 #' @return invisibly NULL.
 #' @export
 nnTorchSetWeights <- function(id, values) {
-  invisible(.Call(`_rxode2nn_nnTorchSetWeights`, as.integer(id), as.double(values)))
+  invisible(.Call(`_nlmixr2nn_nnTorchSetWeights`, as.integer(id), as.double(values)))
 }
 
 #' Forward pass of a torch module at one input (for validation)
@@ -48,14 +48,14 @@ nnTorchSetWeights <- function(id, values) {
 #' @param x numeric input vector of length K.
 #' @return numeric scalar.
 #' @export
-nnTorchForward <- function(id, x) .Call(`_rxode2nn_nnTorchForward`, as.integer(id), as.double(x))
+nnTorchForward <- function(id, x) .Call(`_nlmixr2nn_nnTorchForward`, as.integer(id), as.double(x))
 
 #' Free a torch module
 #' @param id network id.
 #' @return invisibly NULL.
 #' @export
 nnTorchFree <- function(id) {
-  .Call(`_rxode2nn_nnTorchFree`, as.integer(id))
+  .Call(`_nlmixr2nn_nnTorchFree`, as.integer(id))
   .nnEnv$torchIds <- setdiff(.nnEnv$torchIds, as.integer(id))
   invisible()
 }
@@ -66,11 +66,11 @@ nnTorchFree <- function(id) {
 #' @param file path to the serialized module.
 #' @return invisibly NULL.
 #' @export
-nnTorchSave <- function(id, file) invisible(.Call(`_rxode2nn_nnTorchSave`, as.integer(id), file))
+nnTorchSave <- function(id, file) invisible(.Call(`_nlmixr2nn_nnTorchSave`, as.integer(id), file))
 
 #' @rdname nnTorchSave
 #' @export
-nnTorchLoad <- function(id, file) invisible(.Call(`_rxode2nn_nnTorchLoad`, as.integer(id), file))
+nnTorchLoad <- function(id, file) invisible(.Call(`_nlmixr2nn_nnTorchLoad`, as.integer(id), file))
 
 #' Create C++ torch modules for all networks in a model
 #'

@@ -1,4 +1,4 @@
 library(testthat)
-library(rxode2nn)
+library(nlmixr2nn)
 
-test_check("rxode2nn")
+test_check("nlmixr2nn")

@@ -20,55 +20,55 @@
 #' @export
 nn1 <- function(id, x1) {
   d <- data.frame(id = id, x1 = x1)
-  .Call(`_rxode2nn_nn1`, as.double(d$id), as.double(d$x1))
+  .Call(`_nlmixr2nn_nn1`, as.double(d$id), as.double(d$x1))
 }
 #' @rdname nn1
 #' @export
 nn1_d1 <- function(id, x1) {
   d <- data.frame(id = id, x1 = x1)
-  .Call(`_rxode2nn_nn1_d1`, as.double(d$id), as.double(d$x1))
+  .Call(`_nlmixr2nn_nn1_d1`, as.double(d$id), as.double(d$x1))
 }
 #' @rdname nn1
 #' @export
 nn1_d1_d1 <- function(id, x1) {
   d <- data.frame(id = id, x1 = x1)
-  .Call(`_rxode2nn_nn1_d1_d1`, as.double(d$id), as.double(d$x1))
+  .Call(`_nlmixr2nn_nn1_d1_d1`, as.double(d$id), as.double(d$x1))
 }
 #' @rdname nn1
 #' @export
 nn2 <- function(id, x1, x2) {
   d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_rxode2nn_nn2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
+  .Call(`_nlmixr2nn_nn2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
 }
 #' @rdname nn1
 #' @export
 nn2_d1 <- function(id, x1, x2) {
   d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_rxode2nn_nn2_d1`, as.double(d$id), as.double(d$x1), as.double(d$x2))
+  .Call(`_nlmixr2nn_nn2_d1`, as.double(d$id), as.double(d$x1), as.double(d$x2))
 }
 #' @rdname nn1
 #' @export
 nn2_d2 <- function(id, x1, x2) {
   d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_rxode2nn_nn2_d2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
+  .Call(`_nlmixr2nn_nn2_d2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
 }
 #' @rdname nn1
 #' @export
 nn2_d1_d1 <- function(id, x1, x2) {
   d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_rxode2nn_nn2_d1_d1`, as.double(d$id), as.double(d$x1), as.double(d$x2))
+  .Call(`_nlmixr2nn_nn2_d1_d1`, as.double(d$id), as.double(d$x1), as.double(d$x2))
 }
 #' @rdname nn1
 #' @export
 nn2_d1_d2 <- function(id, x1, x2) {
   d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_rxode2nn_nn2_d1_d2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
+  .Call(`_nlmixr2nn_nn2_d1_d2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
 }
 #' @rdname nn1
 #' @export
 nn2_d2_d2 <- function(id, x1, x2) {
   d <- data.frame(id = id, x1 = x1, x2 = x2)
-  .Call(`_rxode2nn_nn2_d2_d2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
+  .Call(`_nlmixr2nn_nn2_d2_d2`, as.double(d$id), as.double(d$x1), as.double(d$x2))
 }
 
 #' Register a network's weight-block layout for solving
@@ -88,7 +88,7 @@ nn2_d2_d2 <- function(id, x1, x2) {
 #' @export
 nnSetMeta <- function(id, base, K, H, act = "relu") {
   act <- match.arg(tolower(act), names(.nnActCode))
-  invisible(.Call(`_rxode2nn_nnSetMeta`, as.integer(id), as.integer(base),
+  invisible(.Call(`_nlmixr2nn_nnSetMeta`, as.integer(id), as.integer(base),
                   as.integer(K), as.integer(H), .nnActCode[[act]]))
 }
 
@@ -96,7 +96,7 @@ nnSetMeta <- function(id, base, K, H, act = "relu") {
 #' @return invisibly TRUE.
 #' @export
 nnClearMeta <- function() {
-  invisible(.Call(`_rxode2nn_nnClearMeta`))
+  invisible(.Call(`_nlmixr2nn_nnClearMeta`))
 }
 
 #' Set a network's externally-owned weight buffer
@@ -110,7 +110,7 @@ nnClearMeta <- function() {
 #' @return invisibly TRUE.
 #' @export
 nnSetWeights <- function(id, values) {
-  invisible(.Call(`_rxode2nn_nnSetWeights`, as.integer(id), as.double(values)))
+  invisible(.Call(`_nlmixr2nn_nnSetWeights`, as.integer(id), as.double(values)))
 }
 
 #' Weight-block layout for a single-hidden-layer MLP

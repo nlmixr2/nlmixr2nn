@@ -1,4 +1,4 @@
-useDynLib(rxode2nn, .registration = TRUE)
+useDynLib(nlmixr2nn, .registration = TRUE)
 importFrom(rxode2, rxD)
 importFrom(rxode2, rxRmFun)
 importFrom(rxode2, rxUdfUi)

@@ -5,7 +5,7 @@
 
 skip_if_no_torch <- function() {
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_rxode2nn_nnTorchAvailable")), error = function(e) FALSE)
+  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
   if (!ok) skip("libtorch backend not available")
 }
 

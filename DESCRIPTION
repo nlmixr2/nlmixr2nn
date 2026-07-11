@@ -1,4 +1,4 @@
-Package: rxode2nn
+Package: nlmixr2nn
 Version: 0.0.0.9000
 Title: Neural-Network ODEs for 'rxode2' and 'nlmixr2'
 Description: Embed neural networks inside ordinary differential equation

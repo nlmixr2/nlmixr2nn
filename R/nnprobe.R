@@ -11,11 +11,11 @@
 #' @export
 nnprobe <- function(idx, x = 0) {
   df <- data.frame(idx = idx, x = x)
-  .Call(`_rxode2nn_nnprobe`, as.double(df$idx), as.double(df$x))
+  .Call(`_nlmixr2nn_nnprobe`, as.double(df$idx), as.double(df$x))
 }
 
 #' @rdname nnprobe
 #' @export
 nnnpars <- function(x = 0) {
-  .Call(`_rxode2nn_nnnpars`, as.double(x))
+  .Call(`_nlmixr2nn_nnnpars`, as.double(x))
 }

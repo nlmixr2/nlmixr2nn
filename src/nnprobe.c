@@ -38,7 +38,7 @@ double nnnpars(double x) {
   return (double) rx->npars;
 }
 
-SEXP _rxode2nn_nnprobe(SEXP idx, SEXP x) {
+SEXP _nlmixr2nn_nnprobe(SEXP idx, SEXP x) {
   int n = LENGTH(idx);
   SEXP out = PROTECT(allocVector(REALSXP, n));
   double *pidx = REAL(idx), *px = REAL(x), *res = REAL(out);
@@ -47,7 +47,7 @@ SEXP _rxode2nn_nnprobe(SEXP idx, SEXP x) {
   return out;
 }
 
-SEXP _rxode2nn_nnnpars(SEXP x) {
+SEXP _nlmixr2nn_nnnpars(SEXP x) {
   int n = LENGTH(x);
   SEXP out = PROTECT(allocVector(REALSXP, n));
   double *px = REAL(x), *res = REAL(out);

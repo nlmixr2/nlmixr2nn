@@ -1,8 +1,8 @@
 .onLoad <- function(libname, pkgname) {
   ## install rxode2's C entry points into this package's function-pointer
   ## globals, then register the par-loader hook (both need the table populated)
-  .Call(`_rxode2nn_iniRxodePtrs`, rxode2::.rxode2ptrs(), PACKAGE = "rxode2nn")
-  .Call(`_rxode2nn_registerLoader`, PACKAGE = "rxode2nn")
+  .Call(`_nlmixr2nn_iniRxodePtrs`, rxode2::.rxode2ptrs(), PACKAGE = "nlmixr2nn")
+  .Call(`_nlmixr2nn_registerLoader`, PACKAGE = "nlmixr2nn")
   .registerRxode2()
 }
 
@@ -28,14 +28,14 @@
     rxFun      = .rows$rxFun,
     fun        = .rows$rxFun,
     type       = .rows$type,
-    package    = "rxode2nn",
+    package    = "nlmixr2nn",
     packageFun = .rows$rxFun,
     argMin     = .rows$nargs,
     argMax     = .rows$nargs,
     threadSafe = 1L,
     stringsAsFactors = FALSE
   )
-  .cur <- .cur[.cur$package != "rxode2nn", , drop = FALSE]
+  .cur <- .cur[.cur$package != "nlmixr2nn", , drop = FALSE]
   rxode2parseAssignTranslation(rbind(.cur, .newRows))
 
   ## probe (constant derivatives)
@@ -67,13 +67,13 @@
   .cur <- try(rxode2parseGetTranslation(), silent = TRUE)
   if (!inherits(.cur, "try-error")) {
     try(rxode2parseAssignTranslation(
-      .cur[.cur$package != "rxode2nn", , drop = FALSE]
+      .cur[.cur$package != "nlmixr2nn", , drop = FALSE]
     ), silent = TRUE)
   }
   for (.nm in .nnTransRows()$rxFun) {
     suppressWarnings(try(rxRmFun(.nm), silent = TRUE))
   }
   ## drop the par-loader hook from rxode2 before unloading our DLL
-  try(.Call(`_rxode2nn_nnUnregisterLoader`), silent = TRUE)
-  library.dynam.unload("rxode2nn", libpath)
+  try(.Call(`_nlmixr2nn_nnUnregisterLoader`), silent = TRUE)
+  library.dynam.unload("nlmixr2nn", libpath)
 }

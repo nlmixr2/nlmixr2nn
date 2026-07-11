@@ -1,4 +1,4 @@
-// C++ libtorch backend for rxode2nn.  Isolated in its own translation unit so
+// C++ libtorch backend for nlmixr2nn.  Isolated in its own translation unit so
 // only this file pulls in the (heavy) torch headers; the hot-path evaluation
 // (nnEval.c) and registration (init.c) stay plain C.
 //
@@ -69,15 +69,15 @@ static MLP &getModule(int id) {
 
 extern "C" {
 
-SEXP _rxode2nn_nnTorchAvailable(void) { return Rf_ScalarLogical(TRUE); }
+SEXP _nlmixr2nn_nnTorchAvailable(void) { return Rf_ScalarLogical(TRUE); }
 
-SEXP _rxode2nn_nnTorchProbe(SEXP n) {
+SEXP _nlmixr2nn_nnTorchProbe(SEXP n) {
   torch::NoGradGuard ng;
   return Rf_ScalarReal(torch::ones({Rf_asInteger(n)}, torch::kFloat64).sum().item<double>());
 }
 
 // create (or replace) a module for network `id`
-SEXP _rxode2nn_nnTorchInit(SEXP id, SEXP K, SEXP H, SEXP act, SEXP seed) {
+SEXP _nlmixr2nn_nnTorchInit(SEXP id, SEXP K, SEXP H, SEXP act, SEXP seed) {
   int i = Rf_asInteger(id);
   if (!Rf_isNull(seed)) torch::manual_seed((uint64_t) Rf_asInteger(seed));
   // operator[] would default-construct MLP (which has no default ctor)
@@ -85,13 +85,13 @@ SEXP _rxode2nn_nnTorchInit(SEXP id, SEXP K, SEXP H, SEXP act, SEXP seed) {
   return Rf_ScalarInteger(i);
 }
 
-SEXP _rxode2nn_nnTorchFree(SEXP id) {
+SEXP _nlmixr2nn_nnTorchFree(SEXP id) {
   g_modules.erase(Rf_asInteger(id));
   return R_NilValue;
 }
 
 // push the module's weights into the nnEval buffer (C path, no R round-trip)
-SEXP _rxode2nn_nnTorchSync(SEXP id) {
+SEXP _nlmixr2nn_nnTorchSync(SEXP id) {
   int i = Rf_asInteger(id);
   torch::NoGradGuard ng;
   torch::Tensor flat = getModule(i)->flatten();
@@ -101,7 +101,7 @@ SEXP _rxode2nn_nnTorchSync(SEXP id) {
 }
 
 // flat weights as an R numeric vector (nnEval layout order)
-SEXP _rxode2nn_nnTorchGetWeights(SEXP id) {
+SEXP _nlmixr2nn_nnTorchGetWeights(SEXP id) {
   torch::NoGradGuard ng;
   torch::Tensor flat = getModule(Rf_asInteger(id))->flatten();
   int n = (int) flat.numel();
@@ -112,13 +112,13 @@ SEXP _rxode2nn_nnTorchGetWeights(SEXP id) {
 }
 
 // load flat weights into the module (restore)
-SEXP _rxode2nn_nnTorchSetWeights(SEXP id, SEXP vals) {
+SEXP _nlmixr2nn_nnTorchSetWeights(SEXP id, SEXP vals) {
   getModule(Rf_asInteger(id))->unflatten(REAL(vals), Rf_length(vals));
   return R_NilValue;
 }
 
 // forward pass of the module at one input row (length K) -- for validation
-SEXP _rxode2nn_nnTorchForward(SEXP id, SEXP x) {
+SEXP _nlmixr2nn_nnTorchForward(SEXP id, SEXP x) {
   torch::NoGradGuard ng;
   MLP m = getModule(Rf_asInteger(id));
   int k = Rf_length(x);
@@ -127,12 +127,12 @@ SEXP _rxode2nn_nnTorchForward(SEXP id, SEXP x) {
   return Rf_ScalarReal(y.item<double>());
 }
 
-SEXP _rxode2nn_nnTorchSave(SEXP id, SEXP path) {
+SEXP _nlmixr2nn_nnTorchSave(SEXP id, SEXP path) {
   torch::save(getModule(Rf_asInteger(id)), std::string(CHAR(STRING_ELT(path, 0))));
   return R_NilValue;
 }
 
-SEXP _rxode2nn_nnTorchLoad(SEXP id, SEXP path) {
+SEXP _nlmixr2nn_nnTorchLoad(SEXP id, SEXP path) {
   torch::load(getModule(Rf_asInteger(id)), std::string(CHAR(STRING_ELT(path, 0))));
   return R_NilValue;
 }

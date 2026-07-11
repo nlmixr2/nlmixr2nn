@@ -5,7 +5,7 @@
 #include <R.h>
 #include <Rinternals.h>
 #include <rxode2parseStruct.h>   /* full rx_solve struct (C-safe, no Rcpp) */
-#include "rxode2nn.h"            /* C bridge to rxode2's function-pointer table */
+#include "nlmixr2nn.h"            /* C bridge to rxode2's function-pointer table */
 
 /* Single-hidden-layer MLP evaluated inside an rxode2 ODE right-hand side.
 
@@ -59,7 +59,7 @@ void nnParLoader(rx_solve *rx, double *gpars, int npars, int ncols) {
 }
 
 static rx_solve *nnGetRx(void) {
-  return rxode2nnGetRxSolve();   /* NULL until the table is installed */
+  return nlmixr2nnGetRxSolve();   /* NULL until the table is installed */
 }
 
 /* activation and its first two derivatives w.r.t. the pre-activation z */
@@ -191,7 +191,7 @@ double nn2_d2_d2(double id, double x1, double x2) {
 }
 
 /* ---- registry management (called from R) --------------------------------- */
-SEXP _rxode2nn_nnSetMeta(SEXP id, SEXP base, SEXP K, SEXP H, SEXP act) {
+SEXP _nlmixr2nn_nnSetMeta(SEXP id, SEXP base, SEXP K, SEXP H, SEXP act) {
   int i = asInteger(id);
   if (i < 0 || i >= NN_MAX) error("nn id out of range");
   nnReg[i].set  = 1;
@@ -218,7 +218,7 @@ void nnSetWeightsC(int id, const double *w, int n) {
 }
 
 /* set (or update) a network's externally-owned weight buffer */
-SEXP _rxode2nn_nnSetWeights(SEXP id, SEXP vals) {
+SEXP _nlmixr2nn_nnSetWeights(SEXP id, SEXP vals) {
   int i = asInteger(id);
   if (i < 0 || i >= NN_MAX) error("nn id out of range");
   int n = LENGTH(vals);
@@ -232,7 +232,7 @@ SEXP _rxode2nn_nnSetWeights(SEXP id, SEXP vals) {
   return ScalarLogical(1);
 }
 
-SEXP _rxode2nn_nnClearMeta(void) {
+SEXP _nlmixr2nn_nnClearMeta(void) {
   for (int i = 0; i < NN_MAX; i++) {
     nnReg[i].set = 0;
     nnReg[i].hasW = 0;
@@ -243,7 +243,7 @@ SEXP _rxode2nn_nnClearMeta(void) {
 
 /* SEXP wrappers so the functions are also callable directly from R for tests */
 #define NN_WRAP2(nm)                                            \
-  SEXP _rxode2nn_##nm(SEXP id, SEXP x1) {                       \
+  SEXP _nlmixr2nn_##nm(SEXP id, SEXP x1) {                       \
     int n = LENGTH(x1);                                         \
     SEXP out = PROTECT(allocVector(REALSXP, n));                \
     double *pid = REAL(id), *p1 = REAL(x1), *r = REAL(out);     \
@@ -251,7 +251,7 @@ SEXP _rxode2nn_nnClearMeta(void) {
     UNPROTECT(1); return out;                                   \
   }
 #define NN_WRAP3(nm)                                                    \
-  SEXP _rxode2nn_##nm(SEXP id, SEXP x1, SEXP x2) {                      \
+  SEXP _nlmixr2nn_##nm(SEXP id, SEXP x1, SEXP x2) {                      \
     int n = LENGTH(x1);                                                 \
     SEXP out = PROTECT(allocVector(REALSXP, n));                        \
     double *pid = REAL(id), *p1 = REAL(x1), *p2 = REAL(x2), *r = REAL(out); \

@@ -6,7 +6,7 @@
 test_that("nn functions register in rxode2 as thread-safe compiled functions", {
   skip_if_not_installed("rxode2")
   tr <- rxode2::rxode2parseGetTranslation()
-  nn <- tr[tr$package == "rxode2nn", , drop = FALSE]
+  nn <- tr[tr$package == "nlmixr2nn", , drop = FALSE]
   expect_true(all(c("nn1", "nn2", "nn2_d1", "nn2_d2",
                     "nn2_d1_d1", "nn2_d1_d2", "nn2_d2_d2") %in% nn$rxFun))
   expect_true(all(nn$threadSafe == 1L))
