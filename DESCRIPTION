@@ -1,0 +1,18 @@
+Package: rxode2nn
+Version: 0.0.0.9000
+Title: Neural-Network ODEs for 'rxode2' and 'nlmixr2'
+Description: Embed neural networks inside ordinary differential equation
+    right-hand sides for 'rxode2' and 'nlmixr2'. Networks are exposed as
+    compiled 'rxode2' custom functions that supply the network value and
+    its analytic input derivatives, allowing larger networks than the
+    per-weight code-generation approach of 'pmxNODE'.
+Authors@R: person("Matthew", "Fidler", role = c("aut", "cre"),
+    email = "matthew.fidler@gmail.com")
+License: GPL (>= 3)
+Encoding: UTF-8
+Imports: rxode2
+LinkingTo: rxode2
+Suggests: nlmixr2, nlmixr2est, numDeriv, testthat (>= 3.0.0)
+NeedsCompilation: yes
+Config/testthat/edition: 3
+RoxygenNote: 7.3.2
