@@ -13,9 +13,7 @@
 ## weight-block base index from the assembled parameter order and registers it
 ## with the compiled layer via [nnSetMeta()].
 
-## registry of networks generated during parsing: id -> layout metadata
-.nnEnv <- new.env(parent = emptyenv())
-.nnEnv$reg <- list()
+## `.nnEnv` (network + torch-module registry) is defined in aaa.R.
 
 #' @export
 rxUdfUi.nn <- function(fun) {
@@ -145,7 +143,10 @@ nnUpdate <- function(x) {
     }
     base <- idx[1] - 1L
     nnSetMeta(m$id, base, m$K, m$H, m$act)
-    if (!is.null(iniEst)) {
+    ## weights source: an attached torch module (preferred) else the ini seed
+    if (m$id %in% .nnEnv$torchIds) {
+      nnTorchSync(m$id)
+    } else if (!is.null(iniEst)) {
       vals <- iniEst[m$weights]
       if (!anyNA(vals)) nnSetWeights(m$id, unname(vals))
     }

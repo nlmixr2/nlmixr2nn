@@ -41,6 +41,18 @@ extern SEXP _rxode2nn_nnSetWeights(SEXP, SEXP);
 extern SEXP _rxode2nn_nnClearMeta(void);
 extern SEXP _rxode2nn_nnUnregisterLoader(void);
 
+/* torch backend (nnTorch.cpp) */
+extern SEXP _rxode2nn_nnTorchProbe(SEXP);
+extern SEXP _rxode2nn_nnTorchAvailable(void);
+extern SEXP _rxode2nn_nnTorchInit(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP _rxode2nn_nnTorchFree(SEXP);
+extern SEXP _rxode2nn_nnTorchSync(SEXP);
+extern SEXP _rxode2nn_nnTorchGetWeights(SEXP);
+extern SEXP _rxode2nn_nnTorchSetWeights(SEXP, SEXP);
+extern SEXP _rxode2nn_nnTorchForward(SEXP, SEXP);
+extern SEXP _rxode2nn_nnTorchSave(SEXP, SEXP);
+extern SEXP _rxode2nn_nnTorchLoad(SEXP, SEXP);
+
 void R_init_rxode2nn(DllInfo *dll) {
   static const R_CallMethodDef callMethods[] = {
     {"_rxode2nn_nnprobe",    (DL_FUNC) &_rxode2nn_nnprobe,    2},
@@ -58,6 +70,16 @@ void R_init_rxode2nn(DllInfo *dll) {
     {"_rxode2nn_nnSetWeights",(DL_FUNC) &_rxode2nn_nnSetWeights, 2},
     {"_rxode2nn_nnClearMeta",(DL_FUNC) &_rxode2nn_nnClearMeta,0},
     {"_rxode2nn_nnUnregisterLoader",(DL_FUNC) &_rxode2nn_nnUnregisterLoader,0},
+    {"_rxode2nn_nnTorchProbe",(DL_FUNC) &_rxode2nn_nnTorchProbe,1},
+    {"_rxode2nn_nnTorchAvailable",(DL_FUNC) &_rxode2nn_nnTorchAvailable,0},
+    {"_rxode2nn_nnTorchInit",(DL_FUNC) &_rxode2nn_nnTorchInit,5},
+    {"_rxode2nn_nnTorchFree",(DL_FUNC) &_rxode2nn_nnTorchFree,1},
+    {"_rxode2nn_nnTorchSync",(DL_FUNC) &_rxode2nn_nnTorchSync,1},
+    {"_rxode2nn_nnTorchGetWeights",(DL_FUNC) &_rxode2nn_nnTorchGetWeights,1},
+    {"_rxode2nn_nnTorchSetWeights",(DL_FUNC) &_rxode2nn_nnTorchSetWeights,2},
+    {"_rxode2nn_nnTorchForward",(DL_FUNC) &_rxode2nn_nnTorchForward,2},
+    {"_rxode2nn_nnTorchSave",(DL_FUNC) &_rxode2nn_nnTorchSave,2},
+    {"_rxode2nn_nnTorchLoad",(DL_FUNC) &_rxode2nn_nnTorchLoad,2},
     {NULL, NULL, 0}
   };
   R_registerRoutines(dll, NULL, callMethods, NULL, NULL);

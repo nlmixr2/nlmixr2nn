@@ -12,7 +12,8 @@ License: GPL (>= 3)
 Encoding: UTF-8
 Imports: rxode2, checkmate, stats
 LinkingTo: rxode2
-Suggests: nlmixr2, nlmixr2est, numDeriv, testthat (>= 3.0.0)
+SystemRequirements: libtorch (via the 'torch' R package; C++17)
+Suggests: nlmixr2, nlmixr2est, numDeriv, torch, testthat (>= 3.0.0)
 NeedsCompilation: yes
 Config/testthat/edition: 3
 RoxygenNote: 7.3.2

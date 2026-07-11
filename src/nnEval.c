@@ -207,6 +207,20 @@ SEXP _rxode2nn_nnSetMeta(SEXP id, SEXP base, SEXP K, SEXP H, SEXP act) {
   return ScalarLogical(1);
 }
 
+/* C-linkage setter so the torch backend (nnTorch.cpp) can fill a network's
+   weight buffer directly, without an R round-trip.  Used at single-threaded
+   solve setup / training steps. */
+void nnSetWeightsC(int id, const double *w, int n) {
+  if (id < 0 || id >= NN_MAX || n <= 0) return;
+  double *buf = (double *) malloc((size_t) n * sizeof(double));
+  if (buf == NULL) return;
+  memcpy(buf, w, (size_t) n * sizeof(double));
+  if (nnReg[id].weights != NULL) free(nnReg[id].weights);
+  nnReg[id].weights = buf;
+  nnReg[id].nW = n;
+  nnReg[id].hasW = 1;
+}
+
 /* set (or update) a network's externally-owned weight buffer */
 SEXP _rxode2nn_nnSetWeights(SEXP id, SEXP vals) {
   int i = asInteger(id);
