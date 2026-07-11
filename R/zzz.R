@@ -69,5 +69,7 @@
   for (.nm in .nnTransRows()$rxFun) {
     suppressWarnings(try(rxRmFun(.nm), silent = TRUE))
   }
+  ## drop the par-loader hook from rxode2 before unloading our DLL
+  try(.Call(`_rxode2nn_nnUnregisterLoader`), silent = TRUE)
   library.dynam.unload("rxode2nn", libpath)
 }

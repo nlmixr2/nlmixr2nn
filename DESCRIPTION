@@ -10,7 +10,7 @@ Authors@R: person("Matthew", "Fidler", role = c("aut", "cre"),
     email = "matthew.fidler@gmail.com")
 License: GPL (>= 3)
 Encoding: UTF-8
-Imports: rxode2
+Imports: rxode2, checkmate, stats
 LinkingTo: rxode2
 Suggests: nlmixr2, nlmixr2est, numDeriv, testthat (>= 3.0.0)
 NeedsCompilation: yes

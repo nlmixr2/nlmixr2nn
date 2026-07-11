@@ -99,6 +99,20 @@ nnClearMeta <- function() {
   invisible(.Call(`_rxode2nn_nnClearMeta`))
 }
 
+#' Set a network's externally-owned weight buffer
+#'
+#' Stores the weights (in `nnWeightLayout()` order) that the rxode2 par-loader
+#' hook injects into the reserved `par_ptr` block on every solve.  This is how
+#' torch-trained weights reach the solve without being nlmixr2 parameters.
+#'
+#' @param id integer network id.
+#' @param values numeric weight vector of length `H*K + 2*H + 1`.
+#' @return invisibly TRUE.
+#' @export
+nnSetWeights <- function(id, values) {
+  invisible(.Call(`_rxode2nn_nnSetWeights`, as.integer(id), as.double(values)))
+}
+
 #' Weight-block layout for a single-hidden-layer MLP
 #'
 #' Returns the ordered weight names for a `K`-input, `H`-hidden network, matching

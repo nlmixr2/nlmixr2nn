@@ -1,5 +1,6 @@
 #define STRICT_R_HEADERS
 #include <stdint.h>
+#include <string.h>
 #include <math.h>
 #include <R.h>
 #include <Rinternals.h>
@@ -32,9 +33,30 @@ typedef struct {
   int K;      /* input dimension */
   int H;      /* hidden width */
   int act;    /* 0 = ReLU, 1 = Softplus, 2 = tanh */
+  int nW;     /* block length = H*K + 2*H + 1 */
+  int hasW;   /* whether an external weight buffer is populated */
+  double *weights; /* externally-owned weights (from torch / nnSetWeights) */
 } nn_meta;
 
 static nn_meta nnReg[NN_MAX];
+
+/* Loader hook invoked by rxode2 once per solve (single-threaded, before the
+   parallel integration).  Overwrites each registered network's reserved
+   par_ptr block, in every column, with its externally-owned weights so that
+   torch -- not nlmixr2's optimizer -- controls the network parameters. */
+void nnParLoader(rx_solve *rx, double *gpars, int npars, int ncols) {
+  (void) rx;
+  for (int id = 0; id < NN_MAX; id++) {
+    if (!nnReg[id].set || !nnReg[id].hasW || nnReg[id].weights == NULL) continue;
+    int base = nnReg[id].base, nW = nnReg[id].nW;
+    if (base < 0 || base + nW > npars) continue;
+    const double *w = nnReg[id].weights;
+    for (int c = 0; c < ncols; c++) {
+      double *col = gpars + (size_t) c * npars;
+      for (int k = 0; k < nW; k++) col[base + k] = w[k];
+    }
+  }
+}
 
 static rx_solve *(*getRxSolve_fn)(void) = NULL;
 static rx_solve *nnGetRx(void) {
@@ -181,10 +203,31 @@ SEXP _rxode2nn_nnSetMeta(SEXP id, SEXP base, SEXP K, SEXP H, SEXP act) {
   nnReg[i].K    = asInteger(K);
   nnReg[i].H    = asInteger(H);
   nnReg[i].act  = asInteger(act);
+  nnReg[i].nW   = nnReg[i].H * nnReg[i].K + 2 * nnReg[i].H + 1;
   return ScalarLogical(1);
 }
+
+/* set (or update) a network's externally-owned weight buffer */
+SEXP _rxode2nn_nnSetWeights(SEXP id, SEXP vals) {
+  int i = asInteger(id);
+  if (i < 0 || i >= NN_MAX) error("nn id out of range");
+  int n = LENGTH(vals);
+  double *buf = (double *) malloc((size_t) n * sizeof(double));
+  if (buf == NULL) error("could not allocate nn weight buffer");
+  memcpy(buf, REAL(vals), (size_t) n * sizeof(double));
+  if (nnReg[i].weights != NULL) free(nnReg[i].weights);
+  nnReg[i].weights = buf;
+  nnReg[i].nW = n;
+  nnReg[i].hasW = 1;
+  return ScalarLogical(1);
+}
+
 SEXP _rxode2nn_nnClearMeta(void) {
-  for (int i = 0; i < NN_MAX; i++) nnReg[i].set = 0;
+  for (int i = 0; i < NN_MAX; i++) {
+    nnReg[i].set = 0;
+    nnReg[i].hasW = 0;
+    if (nnReg[i].weights != NULL) { free(nnReg[i].weights); nnReg[i].weights = NULL; }
+  }
   return ScalarLogical(1);
 }
 

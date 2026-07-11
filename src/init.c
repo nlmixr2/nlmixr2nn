@@ -1,7 +1,13 @@
+#include <stdint.h>
 #include <R.h>
 #include <Rinternals.h>
 #include <R_ext/Rdynload.h>
 #include <stdlib.h>
+#include <rxode2parseStruct.h>
+
+/* par-loader hook registered with rxode2 */
+extern void nnParLoader(rx_solve *rx, double *gpars, int npars, int ncols);
+typedef void (*t_rxParLoader)(rx_solve *rx, double *gpars, int npars, int ncols);
 
 /* probe (validation) */
 extern double nnprobe(double, double);
@@ -31,7 +37,9 @@ extern SEXP _rxode2nn_nn2_d1_d1(SEXP, SEXP, SEXP);
 extern SEXP _rxode2nn_nn2_d1_d2(SEXP, SEXP, SEXP);
 extern SEXP _rxode2nn_nn2_d2_d2(SEXP, SEXP, SEXP);
 extern SEXP _rxode2nn_nnSetMeta(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP _rxode2nn_nnSetWeights(SEXP, SEXP);
 extern SEXP _rxode2nn_nnClearMeta(void);
+extern SEXP _rxode2nn_nnUnregisterLoader(void);
 
 void R_init_rxode2nn(DllInfo *dll) {
   static const R_CallMethodDef callMethods[] = {
@@ -47,11 +55,20 @@ void R_init_rxode2nn(DllInfo *dll) {
     {"_rxode2nn_nn2_d1_d2",  (DL_FUNC) &_rxode2nn_nn2_d1_d2,  3},
     {"_rxode2nn_nn2_d2_d2",  (DL_FUNC) &_rxode2nn_nn2_d2_d2,  3},
     {"_rxode2nn_nnSetMeta",  (DL_FUNC) &_rxode2nn_nnSetMeta,  5},
+    {"_rxode2nn_nnSetWeights",(DL_FUNC) &_rxode2nn_nnSetWeights, 2},
     {"_rxode2nn_nnClearMeta",(DL_FUNC) &_rxode2nn_nnClearMeta,0},
+    {"_rxode2nn_nnUnregisterLoader",(DL_FUNC) &_rxode2nn_nnUnregisterLoader,0},
     {NULL, NULL, 0}
   };
   R_registerRoutines(dll, NULL, callMethods, NULL, NULL);
   R_useDynamicSymbols(dll, FALSE);
+
+  /* register the parameter-block loader hook with rxode2 */
+  {
+    void (*regFn)(t_rxParLoader) =
+      (void (*)(t_rxParLoader)) R_GetCCallable("rxode2", "rxRegisterParLoader");
+    regFn(nnParLoader);
+  }
 
   R_RegisterCCallable("rxode2nn", "nnprobe",   (DL_FUNC) &nnprobe);
   R_RegisterCCallable("rxode2nn", "nnnpars",   (DL_FUNC) &nnnpars);
@@ -64,4 +81,12 @@ void R_init_rxode2nn(DllInfo *dll) {
   R_RegisterCCallable("rxode2nn", "nn2_d1_d1", (DL_FUNC) &nn2_d1_d1);
   R_RegisterCCallable("rxode2nn", "nn2_d1_d2", (DL_FUNC) &nn2_d1_d2);
   R_RegisterCCallable("rxode2nn", "nn2_d2_d2", (DL_FUNC) &nn2_d2_d2);
+}
+
+/* Called from .onUnload before the DLL is removed, so rxode2 does not retain a
+   dangling pointer to nnParLoader. */
+SEXP _rxode2nn_nnUnregisterLoader(void) {
+  DL_FUNC rmFn = R_GetCCallable("rxode2", "rxRemoveParLoader");
+  if (rmFn != NULL) ((void (*)(t_rxParLoader)) rmFn)(nnParLoader);
+  return R_NilValue;
 }
