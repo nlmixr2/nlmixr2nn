@@ -15,8 +15,6 @@ extern SEXP _nlmixr2nn_iniLikContrib(SEXP);
 extern SEXP _nlmixr2nn_registerContrib(void);
 extern SEXP _nlmixr2nn_removeContrib(void);
 extern SEXP _nlmixr2nn_getContrib(void);
-extern SEXP _nlmixr2nn_setDfdwLhs(SEXP);
-extern SEXP _nlmixr2nn_getDLLdw(void);
 
 /* probe (validation) */
 extern double nnprobe(double, double);
@@ -74,8 +72,6 @@ void R_init_nlmixr2nn(DllInfo *dll) {
     {"_nlmixr2nn_registerContrib",(DL_FUNC) &_nlmixr2nn_registerContrib,0},
     {"_nlmixr2nn_removeContrib",(DL_FUNC) &_nlmixr2nn_removeContrib,0},
     {"_nlmixr2nn_getContrib",(DL_FUNC) &_nlmixr2nn_getContrib,0},
-    {"_nlmixr2nn_setDfdwLhs",(DL_FUNC) &_nlmixr2nn_setDfdwLhs,1},
-    {"_nlmixr2nn_getDLLdw",(DL_FUNC) &_nlmixr2nn_getDLLdw,0},
     {"_nlmixr2nn_nnTorchProbe",(DL_FUNC) &_nlmixr2nn_nnTorchProbe,1},
     {"_nlmixr2nn_nnTorchAvailable",(DL_FUNC) &_nlmixr2nn_nnTorchAvailable,0},
     {"_nlmixr2nn_nnTorchInit",(DL_FUNC) &_nlmixr2nn_nnTorchInit,5},
