@@ -14,6 +14,8 @@
     if (!inherits(.p, "try-error")) {
       .Call(`_nlmixr2nn_iniLikContrib`, .p, PACKAGE = "nlmixr2nn")
       .Call(`_nlmixr2nn_registerContrib`, PACKAGE = "nlmixr2nn")
+      ## inner-block per-subject weight injection (no-op vs older nlmixr2est)
+      .Call(`_nlmixr2nn_registerInnerWt`, PACKAGE = "nlmixr2nn")
     }
   }
 }
@@ -71,5 +73,6 @@
   ## drop the par-loader hook + likelihood contribution before unloading our DLL
   try(.Call(`_nlmixr2nn_nnUnregisterLoader`), silent = TRUE)
   try(.Call(`_nlmixr2nn_removeContrib`), silent = TRUE)
+  try(.Call(`_nlmixr2nn_removeInnerWt`), silent = TRUE)
   library.dynam.unload("nlmixr2nn", libpath)
 }

@@ -26,6 +26,7 @@
    is the first argument to nn<K>(). */
 
 #define NN_MAX 256
+#define NN_MAXW 8192   /* max weights per network for the inner-injection buffer */
 
 typedef struct {
   int set;
@@ -36,6 +37,10 @@ typedef struct {
   int nW;     /* block length = H*K + 2*H + 1 */
   int hasW;   /* whether an external weight buffer is populated */
   double *weights; /* externally-owned weights (from torch / nnSetWeights) */
+  /* individual (pop=FALSE) networks: per-subject weights W_i = f(lW, etaW). */
+  int individual; /* 0 = population (shared), 1 = individual (weight etas) */
+  int etaBase;    /* index of the first weight-eta in the FOCEI eta vector */
+  int etaModel;   /* 0 = prop (lW*exp(eta)), 1 = add (lW + eta) */
 } nn_meta;
 
 static nn_meta nnReg[NN_MAX];
@@ -60,6 +65,55 @@ void nnParLoader(rx_solve *rx, double *gpars, int npars, int ncols) {
 
 static rx_solve *nnGetRx(void) {
   return nlmixr2nnGetRxSolve();   /* NULL until the table is installed */
+}
+
+/* Inner-block per-subject weight injection (individual / pop=FALSE networks).
+   FOCEI calls this after subject cid's etas are written to par_ptr and before its
+   inner solve, on every eta-set (including finite-difference perturbations).  For
+   each individual network it overwrites subject cid's par_ptr weight block with
+   W_i = lW*exp(etaW) [prop] / lW + etaW [add], from the population weights lW
+   (nnSetWeights buffer) and the weight-etas in the eta vector.  Touches only
+   subject cid's par_ptr, so it is safe in FOCEI's parallel inner region.
+   Non-mixture: cid is the rxode2 subject index. */
+/* individual weights W_i for network id from population lW + weight-etas; writes
+   nW values to out, returns nW (0 if not an individual/registered network). */
+static int nnIndividualWeights(int id, const double *eta, int neta, double *out) {
+  if (id < 0 || id >= NN_MAX || !nnReg[id].set || !nnReg[id].individual) return 0;
+  if (nnReg[id].weights == NULL) return 0;
+  int nW = nnReg[id].nW, eb = nnReg[id].etaBase;
+  if (eb < 0 || eb + nW > neta) return 0;
+  const double *lw = nnReg[id].weights;
+  for (int k = 0; k < nW; k++)
+    out[k] = (nnReg[id].etaModel == 0) ? lw[k] * exp(eta[eb + k]) : lw[k] + eta[eb + k];
+  return nW;
+}
+
+void nnInnerWeight(int cid, const double *eta, int neta) {
+  rx_solve *rx = nnGetRx();
+  if (rx == NULL || eta == NULL) return;
+  double *pp = rx->subjects[cid].par_ptr;
+  for (int id = 0; id < NN_MAX; id++) {
+    if (!nnReg[id].set || !nnReg[id].individual) continue;
+    int base = nnReg[id].base, nW = nnReg[id].nW;
+    if (base < 0) continue;
+    double wi[NN_MAXW];
+    if (nW > NN_MAXW) continue;
+    if (nnIndividualWeights(id, eta, neta, wi) != nW) continue;
+    for (int k = 0; k < nW; k++) pp[base + k] = wi[k];
+  }
+}
+
+/* test entry: compute the individual weights W_i for a registered network from a
+   supplied eta vector (validates the arithmetic without an active solve). */
+SEXP _nlmixr2nn_nnIndividualWeightsW(SEXP id, SEXP eta) {
+  int i = asInteger(id);
+  if (i < 0 || i >= NN_MAX || !nnReg[i].set) return allocVector(REALSXP, 0);
+  int nW = nnReg[i].nW;
+  SEXP out = PROTECT(allocVector(REALSXP, nW));
+  int got = nnIndividualWeights(i, REAL(eta), Rf_length(eta), REAL(out));
+  if (got != nW) { UNPROTECT(1); return allocVector(REALSXP, 0); }
+  UNPROTECT(1);
+  return out;
 }
 
 /* activation codes (keep in sync with .nnActCode in R and MLPImpl in nnTorch.cpp):
@@ -244,6 +298,22 @@ SEXP _nlmixr2nn_nnSetMeta(SEXP id, SEXP base, SEXP K, SEXP H, SEXP act) {
   nnReg[i].H    = asInteger(H);
   nnReg[i].act  = asInteger(act);
   nnReg[i].nW   = nnReg[i].H * nnReg[i].K + 2 * nnReg[i].H + 1;
+  nnReg[i].individual = 0;   /* default population; nnSetIndividual() opts in */
+  nnReg[i].etaBase = -1;
+  nnReg[i].etaModel = 0;
+  return ScalarLogical(1);
+}
+
+/* Mark a network as individual (pop=FALSE): its weights become per-subject,
+   W_i = f(lW, etaW), with the nW weight-etas starting at etaBase in the FOCEI
+   eta vector; etaModel 0 = prop (lW*exp(eta)), 1 = add (lW + eta).  The inner
+   weight-injection hook (nnInnerWeight) applies this each eta-set. */
+SEXP _nlmixr2nn_nnSetIndividual(SEXP id, SEXP etaBase, SEXP etaModel) {
+  int i = asInteger(id);
+  if (i < 0 || i >= NN_MAX || !nnReg[i].set) error("nn id not registered");
+  nnReg[i].individual = 1;
+  nnReg[i].etaBase = asInteger(etaBase);
+  nnReg[i].etaModel = asInteger(etaModel);
   return ScalarLogical(1);
 }
 

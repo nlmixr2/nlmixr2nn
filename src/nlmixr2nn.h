@@ -19,6 +19,7 @@ void nlmixr2nnRemoveDydtForce(nlmixr2nn_dydtForce_t cb);
 
 /* implemented in nnEval.c */
 void nnParLoader(rx_solve *rx, double *gpars, int npars, int ncols);
+void nnInnerWeight(int cid, const double *eta, int neta);  /* inner individual weights */
 void nnSetWeightsC(int id, const double *w, int n);
 double nnForward(int id, const double *x);
 double nnGrad(int id, const double *x, int m);

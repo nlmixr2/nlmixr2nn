@@ -15,6 +15,10 @@ extern SEXP _nlmixr2nn_iniLikContrib(SEXP);
 extern SEXP _nlmixr2nn_registerContrib(void);
 extern SEXP _nlmixr2nn_removeContrib(void);
 extern SEXP _nlmixr2nn_getContrib(void);
+extern SEXP _nlmixr2nn_registerInnerWt(void);
+extern SEXP _nlmixr2nn_removeInnerWt(void);
+extern SEXP _nlmixr2nn_nnSetIndividual(SEXP, SEXP, SEXP);
+extern SEXP _nlmixr2nn_nnIndividualWeightsW(SEXP, SEXP);
 
 /* probe (validation) */
 extern double nnprobe(double, double);
@@ -72,6 +76,10 @@ void R_init_nlmixr2nn(DllInfo *dll) {
     {"_nlmixr2nn_registerContrib",(DL_FUNC) &_nlmixr2nn_registerContrib,0},
     {"_nlmixr2nn_removeContrib",(DL_FUNC) &_nlmixr2nn_removeContrib,0},
     {"_nlmixr2nn_getContrib",(DL_FUNC) &_nlmixr2nn_getContrib,0},
+    {"_nlmixr2nn_registerInnerWt",(DL_FUNC) &_nlmixr2nn_registerInnerWt,0},
+    {"_nlmixr2nn_removeInnerWt",(DL_FUNC) &_nlmixr2nn_removeInnerWt,0},
+    {"_nlmixr2nn_nnSetIndividual",(DL_FUNC) &_nlmixr2nn_nnSetIndividual,3},
+    {"_nlmixr2nn_nnIndividualWeightsW",(DL_FUNC) &_nlmixr2nn_nnIndividualWeightsW,2},
     {"_nlmixr2nn_nnTorchProbe",(DL_FUNC) &_nlmixr2nn_nnTorchProbe,1},
     {"_nlmixr2nn_nnTorchAvailable",(DL_FUNC) &_nlmixr2nn_nnTorchAvailable,0},
     {"_nlmixr2nn_nnTorchInit",(DL_FUNC) &_nlmixr2nn_nnTorchInit,5},
