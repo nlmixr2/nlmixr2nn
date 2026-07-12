@@ -2,6 +2,7 @@
 
 S3method(rxUdfUi,nn)
 export(nn)
+export(nnAugmentModel)
 export(nnClearMeta)
 export(nnSetMeta)
 export(nnSetWeights)

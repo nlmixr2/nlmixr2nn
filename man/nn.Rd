@@ -7,7 +7,7 @@
 nn(
   ...,
   n_hidden = 5L,
-  act = c("relu", "softplus", "tanh"),
+  act = c("relu", "softplus", "tanh", "gelu", "silu"),
   sd = 0.1,
   num = NULL,
   iniDf = NULL
