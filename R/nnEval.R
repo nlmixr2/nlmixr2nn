@@ -117,10 +117,11 @@ nnWeightGrad <- function(id, x) {
 #' @return character vector of length `H*K + 2*H + 1`.
 #' @export
 nnWeightLayout <- function(id, K, H) {
+  ## rx-prefixed so users recognize them as internal (loader/hook-owned) covariates
   w1 <- as.vector(t(outer(seq_len(H), seq_len(K),
-                          function(j, k) sprintf("nnW1_%d_%d_%d", id, j, k))))
-  b1 <- sprintf("nnB1_%d_%d", id, seq_len(H))
-  w2 <- sprintf("nnW2_%d_%d", id, seq_len(H))
-  b2 <- sprintf("nnB2_%d", id)
+                          function(j, k) sprintf("rxnnW1_%d_%d_%d", id, j, k))))
+  b1 <- sprintf("rxnnB1_%d_%d", id, seq_len(H))
+  w2 <- sprintf("rxnnW2_%d_%d", id, seq_len(H))
+  b2 <- sprintf("rxnnB2_%d", id)
   c(w1, b1, w2, b2)
 }
