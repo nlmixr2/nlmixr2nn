@@ -64,42 +64,40 @@ nn <- function(..., n_hidden = 5L,
 
   wnames <- nnWeightLayout(id, K, H)
 
-  ## random init: small Gaussian weights, zero biases (like a fresh torch MLP)
-  nW <- H * K; nB1 <- H; nW2 <- H
-  est <- c(stats::rnorm(nW, sd = sd),           # W1
-           rep(0, nB1),                          # b1
-           stats::rnorm(nW2, sd = sd),           # W2
-           0)                                    # b2
+  ## Declare the weight block as COVARIATES (not param()/thetas).  Reason: the
+  ## torch/loader owns the weights (they are not nlmixr2 parameters), and -- unlike
+  ## param()-declared thetas, which FOCEI theta-expands and mangles at model
+  ## assembly -- covariates are contiguous in par_ptr, are not theta-expanded, and
+  ## do not enter mu-referencing.  A single dummy reference makes them detected as
+  ## covariates; their placeholder values are added to the data by nnCovData() and
+  ## are overwritten by the par-loader (population) / inner hook (individual) on
+  ## every solve.
+  .before <- paste0("rx_nnw", id, "_ <- ", paste(wnames, collapse = " + "))
 
-  ## append weight thetas to iniDf (population, no IIV), following linMod()
-  .iniDf <- NULL
-  if (inherits(iniDf, "data.frame")) {
-    .theta <- iniDf[!is.na(iniDf$ntheta), , drop = FALSE]
-    if (nrow(.theta) > 0L) {
-      .maxTheta <- max(.theta$ntheta); .row <- .theta[1, ]
-    } else {
-      .maxTheta <- 0L; .row <- .rxBlankIniTheta(iniDf)
-    }
-    .row$lower <- -Inf; .row$upper <- Inf; .row$fix <- FALSE
-    .row$label <- NA_character_; .row$backTransform <- NA_character_
-    .row$condition <- NA_character_; .row$err <- NA_character_
-    .rows <- lapply(seq_along(wnames), function(i) {
-      .r <- .row; .r$name <- wnames[i]; .r$est <- est[i]
-      .r$ntheta <- .maxTheta + i; .r
-    })
-    .eta <- iniDf[is.na(iniDf$ntheta), , drop = FALSE]
-    .iniDf <- rbind(do.call(rbind, c(list(.theta), .rows)), .eta)
-  }
-
-  ## record layout so nnUpdate() can resolve the base index post-assembly
+  ## record layout so nnUpdate() resolves the base index and nnCovData() adds cols
   .nnEnv$reg[[as.character(id)]] <-
     list(id = id, K = K, H = H, act = act, weights = wnames)
 
   .replace <- paste0("nn", K, "(", id, ",", paste(.inputs, collapse = ","), ")")
-  .before  <- paste0("param(", paste(wnames, collapse = ","), ")")
-  list(replace = .replace, before = .before, iniDf = .iniDf)
+  list(replace = .replace, before = .before)
 }
 attr(rxUdfUi.nn, "nargs") <- NULL   # variadic
+
+#' Add placeholder weight-covariate columns for an nn() model to data
+#'
+#' The `nn()` UDF declares each network's weights as covariates; this adds a
+#' 0-valued column per weight to `data` so the model solves.  The par-loader
+#' (population weights) and the FOCEI inner hook (individual weights) overwrite
+#' these slots on every solve, so the placeholder value is irrelevant.
+#'
+#' @param data a data.frame with the estimation/simulation data.
+#' @return `data` with any missing weight-covariate columns added (value 0).
+#' @export
+nnCovData <- function(data) {
+  for (m in .nnEnv$reg) for (w in m$weights)
+    if (is.null(data[[w]])) data[[w]] <- 0
+  data
+}
 
 ## minimal blank theta row compatible with the supplied iniDf columns
 .rxBlankIniTheta <- function(iniDf) {

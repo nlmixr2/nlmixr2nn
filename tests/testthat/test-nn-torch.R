@@ -23,6 +23,7 @@ test_that("torch module drives the ODE solve (solve == module forward)", {
   xs <- c(-1.5, -0.2, 0.4, 1.1, 3.0)
   ev <- do.call(rbind, lapply(seq_along(xs), function(i)
     data.frame(id = i, time = 0, x = xs[i], amt = 0, evid = 0)))
+  ev <- nnCovData(ev)   # weights are covariates (loader overwrites the placeholders)
   s <- rxode2::rxSolve(ui, ev, returnType = "data.frame", covsInterpolation = "locf")
   for (i in seq_along(xs)) {
     expect_equal(s$y[s$id == i][1], nnTorchForward(0, xs[i]), tolerance = 1e-10)
