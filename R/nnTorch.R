@@ -118,6 +118,19 @@ nnTorchBackward <- function(id, X, G) {
 #' @export
 nnTorchGetGrad <- function(id) .Call(`_nlmixr2nn_nnTorchGetGrad`, as.integer(id))
 
+#' Set the network's parameter gradients from a flat vector (nnWeightLayout order)
+#'
+#' Injects an externally computed gradient (e.g. the analytic dLoss/dw from the
+#' ODE forward sensitivity) into the torch parameters' `.grad`, to be applied by
+#' the next [nnTorchStep()].
+#'
+#' @param id network id.
+#' @param grad numeric gradient vector of length `H*K + 2*H + 1`.
+#' @return invisibly NULL.
+#' @export
+nnTorchSetGrad <- function(id, grad)
+  invisible(.Call(`_nlmixr2nn_nnTorchSetGrad`, as.integer(id), as.double(grad)))
+
 #' Optimizer step; also syncs updated weights into the loader buffer
 #' @param id network id.
 #' @return invisibly NULL.

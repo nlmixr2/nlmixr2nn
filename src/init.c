@@ -51,6 +51,7 @@ extern SEXP _nlmixr2nn_nnTorchZeroGrad(SEXP);
 extern SEXP _nlmixr2nn_nnTorchForwardBatch(SEXP, SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnTorchBackward(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnTorchGetGrad(SEXP);
+extern SEXP _nlmixr2nn_nnTorchSetGrad(SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnTorchStep(SEXP);
 
 void R_init_nlmixr2nn(DllInfo *dll) {
@@ -86,6 +87,7 @@ void R_init_nlmixr2nn(DllInfo *dll) {
     {"_nlmixr2nn_nnTorchForwardBatch",(DL_FUNC) &_nlmixr2nn_nnTorchForwardBatch,4},
     {"_nlmixr2nn_nnTorchBackward",(DL_FUNC) &_nlmixr2nn_nnTorchBackward,5},
     {"_nlmixr2nn_nnTorchGetGrad",(DL_FUNC) &_nlmixr2nn_nnTorchGetGrad,1},
+    {"_nlmixr2nn_nnTorchSetGrad",(DL_FUNC) &_nlmixr2nn_nnTorchSetGrad,2},
     {"_nlmixr2nn_nnTorchStep",(DL_FUNC) &_nlmixr2nn_nnTorchStep,1},
     {NULL, NULL, 0}
   };

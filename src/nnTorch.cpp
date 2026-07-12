@@ -58,6 +58,21 @@ struct MLPImpl : torch::nn::Module {
     l2->weight.data().copy_(t.slice(0, o, o + H).reshape({1, H}));    o += H;
     l2->bias.data().copy_(t.slice(0, o, o + 1));
   }
+  // set parameter .grad from a flat vector (nnEval layout order); the optimizer
+  // step then applies it.  Used to inject the analytic dLoss/dw computed from the
+  // ODE forward sensitivity (instead of a torch autograd backward pass).
+  void setGrad(const double *g, int n) {
+    torch::NoGradGuard ng;
+    int need = H * K + 2 * H + 1;
+    if (n != need) Rf_error("nn grad length %d != expected %d", n, need);
+    torch::Tensor t = torch::from_blob((void *) g, {n}, torch::kFloat64)
+                        .clone().to(l1->weight.dtype());
+    int o = 0;
+    l1->weight.mutable_grad() = t.slice(0, o, o + H * K).reshape({H, K}).clone(); o += H * K;
+    l1->bias.mutable_grad()   = t.slice(0, o, o + H).clone();                     o += H;
+    l2->weight.mutable_grad() = t.slice(0, o, o + H).reshape({1, H}).clone();     o += H;
+    l2->bias.mutable_grad()   = t.slice(0, o, o + 1).clone();
+  }
 };
 TORCH_MODULE(MLP);
 
@@ -204,6 +219,13 @@ SEXP _nlmixr2nn_nnTorchGetGrad(SEXP id) {
   std::memcpy(REAL(out), flat.data_ptr<double>(), (size_t) n * sizeof(double));
   UNPROTECT(1);
   return out;
+}
+
+// set the parameter gradients from a flat vector (nnEval layout order), e.g. the
+// analytic dLoss/dw from the ODE forward sensitivity; pair with nnTorchStep.
+SEXP _nlmixr2nn_nnTorchSetGrad(SEXP id, SEXP grad) {
+  getModule(Rf_asInteger(id))->setGrad(REAL(grad), Rf_length(grad));
+  return R_NilValue;
 }
 
 // optimizer step, then push the updated weights into the loader buffer so the
