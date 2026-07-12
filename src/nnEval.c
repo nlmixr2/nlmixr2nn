@@ -164,6 +164,55 @@ double nnHess(int id, const double *x, int m, int l) {
   return h;
 }
 
+/* Analytic gradient of the output w.r.t. every weight, d(out)/d(w), in the
+   nnWeightLayout order (W1 row-major, b1, W2, b2).  Plain C from the weights and
+   input -- thread-safe, no torch in the hot loop.  This is the forcing factor
+   d(g)/d(w_j) for the forward-sensitivity variational state of each NN weight
+   (paired with rxode2's symbolic d(RHS)/d(g)).  g has length H*K + 2*H + 1. */
+static void nnWeightGradCore(const double *W1, const double *b1, const double *W2,
+                             int K, int H, int act, const double *x, double *g) {
+  int ob1 = H * K, oW2 = H * K + H, ob2 = H * K + 2 * H;
+  for (int j = 0; j < H; j++) {
+    double z = b1[j];
+    for (int k = 0; k < K; k++) z += W1[j * K + k] * x[k];
+    double hj = nnAct(act, z), dj = nnActD(act, z);
+    for (int k = 0; k < K; k++) g[j * K + k] = W2[j] * dj * x[k]; /* d/dW1[j,k] */
+    g[ob1 + j] = W2[j] * dj;                                      /* d/db1[j]   */
+    g[oW2 + j] = hj;                                              /* d/dW2[j]   */
+  }
+  g[ob2] = 1.0;                                                   /* d/db2      */
+}
+
+void nnWeightGrad(int id, const double *x, double *g) {
+  int K, H, act;
+  const double *w = nnWeights(id, &K, &H, &act);   /* reads par_ptr */
+  if (w == NULL) return;
+  nnWeightGradCore(w, w + H * K, w + H * K + H, K, H, act, x, g);
+}
+
+/* test entry: compute the weight gradient from explicit weights (nnWeightLayout
+   order) so the analytic formula can be validated without an active solve. */
+SEXP _nlmixr2nn_nnWeightGradW(SEXP K_, SEXP H_, SEXP act_, SEXP w, SEXP x) {
+  int K = asInteger(K_), H = asInteger(H_), act = asInteger(act_);
+  int nW = H * K + 2 * H + 1;
+  const double *W = REAL(w);
+  SEXP out = PROTECT(allocVector(REALSXP, nW));
+  nnWeightGradCore(W, W + H * K, W + H * K + H, K, H, act, REAL(x), REAL(out));
+  UNPROTECT(1);
+  return out;
+}
+
+SEXP _nlmixr2nn_nnWeightGrad(SEXP id, SEXP x) {
+  int i = asInteger(id);
+  if (i < 0 || i >= NN_MAX || !nnReg[i].set) return allocVector(REALSXP, 0);
+  int nW = nnReg[i].nW;
+  SEXP out = PROTECT(allocVector(REALSXP, nW));
+  for (int k = 0; k < nW; k++) REAL(out)[k] = 0.0;
+  nnWeightGrad(i, REAL(x), REAL(out));
+  UNPROTECT(1);
+  return out;
+}
+
 /* The fixed-arity rxode2 entry points nn<K> / nn<K>_d<j> / nn<K>_d<j>_d<l>
    (for K = 1..NN_KMAX) are code-generated in nnEvalGen.c and call nnForward /
    nnGrad / nnHess above. */

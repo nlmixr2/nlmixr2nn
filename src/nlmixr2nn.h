@@ -20,6 +20,7 @@ void nnSetWeightsC(int id, const double *w, int n);
 double nnForward(int id, const double *x);
 double nnGrad(int id, const double *x, int m);
 double nnHess(int id, const double *x, int m, int l);
+void nnWeightGrad(int id, const double *x, double *g);   /* d(out)/d(each weight) */
 
 /* generated in nnEvalGen.c: registers the nn<K> scalar entry points with rxode2 */
 void nnRegisterCallables(void);

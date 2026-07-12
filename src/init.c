@@ -25,6 +25,8 @@ extern SEXP _nlmixr2nn_nnnpars(SEXP);
 /* nn<K> scalar entry points are code-generated (nnEvalGen.c) and registered via
    nnRegisterCallables(); direct R evaluation goes through one dispatcher. */
 extern SEXP _nlmixr2nn_nnEval(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP _nlmixr2nn_nnWeightGrad(SEXP, SEXP);
+extern SEXP _nlmixr2nn_nnWeightGradW(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnSetMeta(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnSetWeights(SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnClearMeta(void);
@@ -53,6 +55,8 @@ void R_init_nlmixr2nn(DllInfo *dll) {
     {"_nlmixr2nn_nnprobe",    (DL_FUNC) &_nlmixr2nn_nnprobe,    2},
     {"_nlmixr2nn_nnnpars",    (DL_FUNC) &_nlmixr2nn_nnnpars,    1},
     {"_nlmixr2nn_nnEval",     (DL_FUNC) &_nlmixr2nn_nnEval,     5},
+    {"_nlmixr2nn_nnWeightGrad",(DL_FUNC) &_nlmixr2nn_nnWeightGrad, 2},
+    {"_nlmixr2nn_nnWeightGradW",(DL_FUNC) &_nlmixr2nn_nnWeightGradW, 5},
     {"_nlmixr2nn_nnSetMeta",  (DL_FUNC) &_nlmixr2nn_nnSetMeta,  5},
     {"_nlmixr2nn_nnSetWeights",(DL_FUNC) &_nlmixr2nn_nnSetWeights, 2},
     {"_nlmixr2nn_nnClearMeta",(DL_FUNC) &_nlmixr2nn_nnClearMeta,0},

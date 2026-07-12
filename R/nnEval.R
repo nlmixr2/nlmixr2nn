@@ -58,6 +58,21 @@ nnSetWeights <- function(id, values) {
   invisible(.Call(`_nlmixr2nn_nnSetWeights`, as.integer(id), as.double(values)))
 }
 
+#' Analytic gradient of a network's output w.r.t. every weight
+#'
+#' Returns d(output)/d(w) in `nnWeightLayout()` order for the registered network
+#' `id` at input `x`, reading the weights from the loader buffer.  Computed in
+#' plain C (thread-safe); this is the `d(g)/d(w)` forcing factor for the
+#' forward-sensitivity variational states of the NN weights.
+#'
+#' @param id integer network id (must be registered via [nnSetMeta()]).
+#' @param x numeric input vector of length K.
+#' @return numeric vector of length `H*K + 2*H + 1`.
+#' @export
+nnWeightGrad <- function(id, x) {
+  .Call(`_nlmixr2nn_nnWeightGrad`, as.integer(id), as.double(x))
+}
+
 #' Weight-block layout for a single-hidden-layer MLP
 #'
 #' Returns the ordered weight names for a `K`-input, `H`-hidden network, matching
