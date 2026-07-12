@@ -67,7 +67,10 @@ nnAugmentModel <- function(modelText, H) {
   .out <- unlist(strsplit(trimws(modelText), "\n", fixed = TRUE))
   ## dR/dg outputs (read by the forcing hook)
   for (i in seq_len(.ns)) .out <- c(.out, sprintf("rx_drdg_%s_ = %s", .st[i], .drdg[[i]]))
-  ## variational states: d/dt(s_ij) = sum_k F_X[i,k] s_kj  (+ hook forcing b_ij)
+  ## variational states: d/dt(s_ij) = sum_k F_X[i,k] s_kj + (dR_i/dg)(dg/dw_j)
+  ## where the forcing factor dg/dw_j = nnWg<K>(id, j, inputs) reads the live
+  ## (injected) weights at the current nn input; rx_drdg_<i>_ = dR_i/dg (above).
+  .ins <- paste(.call$inputs, collapse = ", ")
   for (j in seq_len(.nW) - 1L) {
     for (i in seq_len(.ns)) {
       .terms <- character(0)
@@ -76,7 +79,9 @@ nnAugmentModel <- function(modelText, H) {
         if (!identical(.f, "0") && nzchar(.f))
           .terms <- c(.terms, sprintf("(%s)*%s", .f, .sw(k, j)))
       }
-      .rhs <- if (length(.terms)) paste(.terms, collapse = " + ") else "0"
+      .fxs <- if (length(.terms)) paste(.terms, collapse = " + ") else "0"
+      .forcing <- sprintf("rx_drdg_%s_*nnWg%d(%d, %d, %s)", .st[i], .K, .call$id, j, .ins)
+      .rhs <- if (identical(.fxs, "0")) .forcing else paste(.fxs, "+", .forcing)
       .out <- c(.out, sprintf("d/dt(%s) = %s", .sw(i, j), .rhs))
     }
   }

@@ -1,41 +1,50 @@
 ## B3: forward-sensitivity augmented NN model (nnAugmentModel).
-## Validates (1) the emitted dR/dg outputs, and (2) the F_X.s variational block,
-## the latter via an initial-condition sensitivity finite difference: with a unit
-## IC on a weight-0 variational state and zero forcing, rx_sw_<state>_0_(t) equals
-## d(state(t))/d(perturbed IC), which we finite-difference against base re-solves.
-## (The forcing term b_ij = dR/dg * dg/dw is added by the dydt-force hook, wired
-## in a later phase; here the variational block is exercised on its own.)
+## The augmented model's variational states rx_sw_<state>_<j>_ integrate
+##   d/dt(s_ij) = sum_k F_X[i,k] s_kj + (dR_i/dg) nnWg(id, j, inputs)
+## and so equal d(state)/d(w_j) at solve end.  Validated against a finite
+## difference of the base states wrt each weight.
 
-test_that("nnAugmentModel emits correct dR/dg and F_X.s variational block", {
+test_that("nnAugmentModel: variational states equal d(state)/d(weight) (FD check)", {
   skip_if_not_installed("rxode2")
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
   nnClearMeta(); nnSetMeta(0L, base = 0L, K = 2L, H = 1L, act = "tanh")  # nW = 5
   on.exit(nnClearMeta(), add = TRUE)
-  obj <- "g = nn2(0, centr, peri)\nd/dt(centr) = -g*centr\nd/dt(peri) = g*centr - k*peri"
-
+  ## reserve the weight block (base = 0) via param() so the loader-injected
+  ## weights occupy dedicated par_ptr slots (indices 0..4) ahead of k.
+  wnm <- nnWeightLayout(0L, K = 2L, H = 1L)
+  obj <- paste0(
+    sprintf("param(%s)\n", paste(wnm, collapse = ", ")),
+    "g = nn2(0, centr, peri)\nd/dt(centr) = -g*centr\nd/dt(peri) = g*centr - k*peri")
   aug <- nnAugmentModel(obj, H = 1L)
-  ## 2 states * 5 weights = 10 variational states
-  expect_equal(length(gregexpr("d/dt(rx_sw_", aug, fixed = TRUE)[[1]]), 10L)
+  expect_equal(length(gregexpr("d/dt(rx_sw_", aug, fixed = TRUE)[[1]]), 10L)  # 2 states * 5 weights
 
-  nnSetWeights(0L, as.double(seq_len(5)) / 10)  # fixed deterministic weights
-  m <- rxode2::rxode2(aug)
-  ev <- rxode2::et(seq(0, 5, by = 1))
-  p <- c(k = 0.3)
+  w  <- c(0.3, -0.4, 0.5, 0.2, -0.1)      # fixed weights (nW = 5)
+  ## weight params need placeholder values at solve setup; the par-loader
+  ## overwrites them with the nnSetWeights() buffer before integration.
+  p  <- c(k = 0.3, setNames(rep(0, length(wnm)), wnm)); ic <- c(centr = 10, peri = 0)
+  ev <- rxode2::et(seq(0, 4, by = 1))
+  mAug  <- rxode2::rxode2(aug)
+  mBase <- rxode2::rxode2(obj)
+
+  nnSetWeights(0L, w)
+  sAug <- rxode2::rxSolve(mAug, ev, params = p, inits = ic)
 
   ## dR/dg outputs
-  s0 <- rxode2::rxSolve(m, ev, params = p, inits = c(centr = 10, peri = 0))
-  expect_equal(s0$rx_drdg_centr_, -s0$centr, tolerance = 1e-8)
-  expect_equal(s0$rx_drdg_peri_,  s0$centr, tolerance = 1e-8)
+  expect_equal(sAug$rx_drdg_centr_, -sAug$centr, tolerance = 1e-8)
+  expect_equal(sAug$rx_drdg_peri_,   sAug$centr, tolerance = 1e-8)
 
-  ## F_X.s block: unit IC on weight-0 variational states in the centr direction
-  ## => rx_sw_centr_0_(t) = d centr(t)/d centr(0), rx_sw_peri_0_(t) = d peri(t)/d centr(0)
-  sv <- rxode2::rxSolve(m, ev, params = p,
-                        inits = c(centr = 10, peri = 0, rx_sw_centr_0_ = 1, rx_sw_peri_0_ = 0))
-  h <- 1e-4
-  sb  <- rxode2::rxSolve(m, ev, params = p, inits = c(centr = 10, peri = 0))
-  sbh <- rxode2::rxSolve(m, ev, params = p, inits = c(centr = 10 + h, peri = 0))
-  fdCentr <- (sbh$centr - sb$centr) / h
-  fdPeri  <- (sbh$peri  - sb$peri)  / h
-  expect_equal(sv$rx_sw_centr_0_, fdCentr, tolerance = 1e-3)
-  expect_equal(sv$rx_sw_peri_0_,  fdPeri,  tolerance = 1e-3)
+  ## df/dw vs central finite difference of the base states wrt each weight
+  h <- 1e-5
+  for (j in c(0L, 2L, 4L)) {
+    wp <- w; wp[j + 1L] <- wp[j + 1L] + h
+    wm <- w; wm[j + 1L] <- wm[j + 1L] - h
+    nnSetWeights(0L, wp); sp <- rxode2::rxSolve(mBase, ev, params = p, inits = ic)
+    nnSetWeights(0L, wm); sm <- rxode2::rxSolve(mBase, ev, params = p, inits = ic)
+    fdCentr <- (sp$centr - sm$centr) / (2 * h)
+    fdPeri  <- (sp$peri  - sm$peri)  / (2 * h)
+    expect_equal(sAug[[sprintf("rx_sw_centr_%d_", j)]], fdCentr, tolerance = 1e-4,
+                 info = paste("weight", j))
+    expect_equal(sAug[[sprintf("rx_sw_peri_%d_", j)]],  fdPeri,  tolerance = 1e-4,
+                 info = paste("weight", j))
+  }
 })

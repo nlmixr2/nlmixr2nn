@@ -16,6 +16,20 @@
          numeric(1))
 }
 
+## Dispatcher for the generated nnWg<K>(id, j, x...) wrappers: element j of the
+## weight gradient d(out)/d(w) at each input row, reading the registered weights.
+## Returns NA outside an active solve (no par_ptr); the in-solve path uses the C
+## nnWg<K> entry points.  Mainly present so rxode2's renderer can resolve nnWg<K>.
+.nnWgEvalR <- function(id, j, ...) {
+  m <- cbind(...)
+  storage.mode(m) <- "double"
+  id <- as.integer(id[1]); j <- as.integer(j)
+  vapply(seq_len(nrow(m)), function(i) {
+    g <- .Call(`_nlmixr2nn_nnWeightGrad`, id, m[i, ])
+    if (length(g) > j) g[j + 1L] else NA_real_
+  }, numeric(1))
+}
+
 #' Register a network's weight-block layout for solving
 #'
 #' The single-hidden-layer MLP `nn<K>(id, ...)` reads its weights from a

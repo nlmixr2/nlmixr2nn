@@ -6,12 +6,14 @@
 nn1 <- function(id, x1) .nnEvalR(id, 0L, 0L, 0L, x1)
 nn1_d1 <- function(id, x1) .nnEvalR(id, 1L, 0L, 0L, x1)
 nn1_d1_d1 <- function(id, x1) .nnEvalR(id, 2L, 0L, 0L, x1)
+nnWg1 <- function(id, j, x1) .nnWgEvalR(id, j, x1)
 nn2 <- function(id, x1, x2) .nnEvalR(id, 0L, 0L, 0L, x1, x2)
 nn2_d1 <- function(id, x1, x2) .nnEvalR(id, 1L, 0L, 0L, x1, x2)
 nn2_d2 <- function(id, x1, x2) .nnEvalR(id, 1L, 1L, 0L, x1, x2)
 nn2_d1_d1 <- function(id, x1, x2) .nnEvalR(id, 2L, 0L, 0L, x1, x2)
 nn2_d1_d2 <- function(id, x1, x2) .nnEvalR(id, 2L, 0L, 1L, x1, x2)
 nn2_d2_d2 <- function(id, x1, x2) .nnEvalR(id, 2L, 1L, 1L, x1, x2)
+nnWg2 <- function(id, j, x1, x2) .nnWgEvalR(id, j, x1, x2)
 nn3 <- function(id, x1, x2, x3) .nnEvalR(id, 0L, 0L, 0L, x1, x2, x3)
 nn3_d1 <- function(id, x1, x2, x3) .nnEvalR(id, 1L, 0L, 0L, x1, x2, x3)
 nn3_d2 <- function(id, x1, x2, x3) .nnEvalR(id, 1L, 1L, 0L, x1, x2, x3)
@@ -22,6 +24,7 @@ nn3_d1_d3 <- function(id, x1, x2, x3) .nnEvalR(id, 2L, 0L, 2L, x1, x2, x3)
 nn3_d2_d2 <- function(id, x1, x2, x3) .nnEvalR(id, 2L, 1L, 1L, x1, x2, x3)
 nn3_d2_d3 <- function(id, x1, x2, x3) .nnEvalR(id, 2L, 1L, 2L, x1, x2, x3)
 nn3_d3_d3 <- function(id, x1, x2, x3) .nnEvalR(id, 2L, 2L, 2L, x1, x2, x3)
+nnWg3 <- function(id, j, x1, x2, x3) .nnWgEvalR(id, j, x1, x2, x3)
 nn4 <- function(id, x1, x2, x3, x4) .nnEvalR(id, 0L, 0L, 0L, x1, x2, x3, x4)
 nn4_d1 <- function(id, x1, x2, x3, x4) .nnEvalR(id, 1L, 0L, 0L, x1, x2, x3, x4)
 nn4_d2 <- function(id, x1, x2, x3, x4) .nnEvalR(id, 1L, 1L, 0L, x1, x2, x3, x4)
@@ -37,6 +40,7 @@ nn4_d2_d4 <- function(id, x1, x2, x3, x4) .nnEvalR(id, 2L, 1L, 3L, x1, x2, x3, x
 nn4_d3_d3 <- function(id, x1, x2, x3, x4) .nnEvalR(id, 2L, 2L, 2L, x1, x2, x3, x4)
 nn4_d3_d4 <- function(id, x1, x2, x3, x4) .nnEvalR(id, 2L, 2L, 3L, x1, x2, x3, x4)
 nn4_d4_d4 <- function(id, x1, x2, x3, x4) .nnEvalR(id, 2L, 3L, 3L, x1, x2, x3, x4)
+nnWg4 <- function(id, j, x1, x2, x3, x4) .nnWgEvalR(id, j, x1, x2, x3, x4)
 
 .nnGenNames <- c(
   "nn1", "nn1_d1", "nn1_d1_d1", "nn2", "nn2_d1", "nn2_d2", "nn2_d1_d1", "nn2_d1_d2", "nn2_d2_d2", "nn3", "nn3_d1", "nn3_d2", "nn3_d3", "nn3_d1_d1", "nn3_d1_d2", "nn3_d1_d3", "nn3_d2_d2", "nn3_d2_d3", "nn3_d3_d3", "nn4", "nn4_d1", "nn4_d2", "nn4_d3", "nn4_d4", "nn4_d1_d1", "nn4_d1_d2", "nn4_d1_d3", "nn4_d1_d4", "nn4_d2_d2", "nn4_d2_d3", "nn4_d2_d4", "nn4_d3_d3", "nn4_d3_d4", "nn4_d4_d4"
@@ -45,20 +49,31 @@ nn4_d4_d4 <- function(id, x1, x2, x3, x4) .nnEvalR(id, 2L, 3L, 3L, x1, x2, x3, x
   2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5
 )
 
+.nnWgGenNames <- c(
+  "nnWg1", "nnWg2", "nnWg3", "nnWg4"
+)
+.nnWgGenNargs <- c(
+  3, 4, 5, 6
+)
+
 .nnGenRegisterD <- function() {
   rxD("nn1", list(NULL, function(id, x1) paste0("nn1_d1(", id, ",", x1, ")")))
   rxD("nn1_d1", list(NULL, function(id, x1) paste0("nn1_d1_d1(", id, ",", x1, ")")))
+  rxD("nnWg1", list(function(id, j, x1) "0.0", function(id, j, x1) "0.0", function(id, j, x1) "0.0"))
   rxD("nn2", list(NULL, function(id, x1, x2) paste0("nn2_d1(", id, ",", x1, ",", x2, ")"), function(id, x1, x2) paste0("nn2_d2(", id, ",", x1, ",", x2, ")")))
   rxD("nn2_d1", list(NULL, function(id, x1, x2) paste0("nn2_d1_d1(", id, ",", x1, ",", x2, ")"), function(id, x1, x2) paste0("nn2_d1_d2(", id, ",", x1, ",", x2, ")")))
   rxD("nn2_d2", list(NULL, function(id, x1, x2) paste0("nn2_d1_d2(", id, ",", x1, ",", x2, ")"), function(id, x1, x2) paste0("nn2_d2_d2(", id, ",", x1, ",", x2, ")")))
+  rxD("nnWg2", list(function(id, j, x1, x2) "0.0", function(id, j, x1, x2) "0.0", function(id, j, x1, x2) "0.0", function(id, j, x1, x2) "0.0"))
   rxD("nn3", list(NULL, function(id, x1, x2, x3) paste0("nn3_d1(", id, ",", x1, ",", x2, ",", x3, ")"), function(id, x1, x2, x3) paste0("nn3_d2(", id, ",", x1, ",", x2, ",", x3, ")"), function(id, x1, x2, x3) paste0("nn3_d3(", id, ",", x1, ",", x2, ",", x3, ")")))
   rxD("nn3_d1", list(NULL, function(id, x1, x2, x3) paste0("nn3_d1_d1(", id, ",", x1, ",", x2, ",", x3, ")"), function(id, x1, x2, x3) paste0("nn3_d1_d2(", id, ",", x1, ",", x2, ",", x3, ")"), function(id, x1, x2, x3) paste0("nn3_d1_d3(", id, ",", x1, ",", x2, ",", x3, ")")))
   rxD("nn3_d2", list(NULL, function(id, x1, x2, x3) paste0("nn3_d1_d2(", id, ",", x1, ",", x2, ",", x3, ")"), function(id, x1, x2, x3) paste0("nn3_d2_d2(", id, ",", x1, ",", x2, ",", x3, ")"), function(id, x1, x2, x3) paste0("nn3_d2_d3(", id, ",", x1, ",", x2, ",", x3, ")")))
   rxD("nn3_d3", list(NULL, function(id, x1, x2, x3) paste0("nn3_d1_d3(", id, ",", x1, ",", x2, ",", x3, ")"), function(id, x1, x2, x3) paste0("nn3_d2_d3(", id, ",", x1, ",", x2, ",", x3, ")"), function(id, x1, x2, x3) paste0("nn3_d3_d3(", id, ",", x1, ",", x2, ",", x3, ")")))
+  rxD("nnWg3", list(function(id, j, x1, x2, x3) "0.0", function(id, j, x1, x2, x3) "0.0", function(id, j, x1, x2, x3) "0.0", function(id, j, x1, x2, x3) "0.0", function(id, j, x1, x2, x3) "0.0"))
   rxD("nn4", list(NULL, function(id, x1, x2, x3, x4) paste0("nn4_d1(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d2(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d3(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d4(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")")))
   rxD("nn4_d1", list(NULL, function(id, x1, x2, x3, x4) paste0("nn4_d1_d1(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d1_d2(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d1_d3(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d1_d4(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")")))
   rxD("nn4_d2", list(NULL, function(id, x1, x2, x3, x4) paste0("nn4_d1_d2(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d2_d2(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d2_d3(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d2_d4(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")")))
   rxD("nn4_d3", list(NULL, function(id, x1, x2, x3, x4) paste0("nn4_d1_d3(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d2_d3(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d3_d3(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d3_d4(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")")))
   rxD("nn4_d4", list(NULL, function(id, x1, x2, x3, x4) paste0("nn4_d1_d4(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d2_d4(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d3_d4(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")"), function(id, x1, x2, x3, x4) paste0("nn4_d4_d4(", id, ",", x1, ",", x2, ",", x3, ",", x4, ")")))
+  rxD("nnWg4", list(function(id, j, x1, x2, x3, x4) "0.0", function(id, j, x1, x2, x3, x4) "0.0", function(id, j, x1, x2, x3, x4) "0.0", function(id, j, x1, x2, x3, x4) "0.0", function(id, j, x1, x2, x3, x4) "0.0", function(id, j, x1, x2, x3, x4) "0.0"))
   invisible()
 }

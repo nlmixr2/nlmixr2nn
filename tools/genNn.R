@@ -39,9 +39,15 @@ for (K in seq_len(KMAX)) {
     cC <- c(cC, sprintf("double nn%d_d%d_d%d(%s) {", K, j, l, a), xi,
             sprintf("  return nnHess((int) id, x, %d, %d);", j - 1L, l - 1L), "}")
   }
+  ## weight-gradient entry nnWg<K>(id, j, x...) = d(out)/d(w_j); the forcing
+  ## factor for the NN-weight forward-sensitivity variational states.
+  awg <- paste(c("double id", "double j", .args(K)), collapse = ", ")
+  cC <- c(cC, sprintf("double nnWg%d(%s) {", K, awg), xi,
+          "  return nnWeightGradJ((int) id, x, (int) j);", "}")
   for (nm in .names(K)$all) {
     cReg <- c(cReg, sprintf("  R_RegisterCCallable(\"nlmixr2nn\", \"%s\", (DL_FUNC) &%s);", nm, nm))
   }
+  cReg <- c(cReg, sprintf("  R_RegisterCCallable(\"nlmixr2nn\", \"nnWg%d\", (DL_FUNC) &nnWg%d);", K, K))
 }
 cC <- c(cC, "", cReg, "}", "")
 writeLines(cC, "src/nnEvalGen.c")
@@ -67,6 +73,9 @@ for (K in seq_len(KMAX)) {
     rR <- c(rR, sprintf("nn%d_d%d_d%d <- function(%s) .nnEvalR(id, 2L, %dL, %dL, %s)",
                         K, j, l, a, j - 1L, l - 1L, xs))
   }
+  ## nnWg<K>(id, j, x...): weight-gradient element (for the renderer + direct eval)
+  awg <- paste(c("id", "j", paste0("x", seq_len(K))), collapse = ", ")
+  rR <- c(rR, sprintf("nnWg%d <- function(%s) .nnWgEvalR(id, j, %s)", K, awg, xs))
 }
 ## translation-table rows
 allNames <- character(0); allNargs <- integer(0)
@@ -78,6 +87,12 @@ for (K in seq_len(KMAX)) {
 rR <- c(rR, "",
         ".nnGenNames <- c(", paste0("  ", paste0("\"", allNames, "\"", collapse = ", ")), ")",
         ".nnGenNargs <- c(", paste0("  ", paste(allNargs, collapse = ", ")), ")")
+## nnWg<K> weight-gradient entries (arity id + j + K inputs = K + 2)
+allWgNames <- sprintf("nnWg%d", seq_len(KMAX))
+allWgNargs <- seq_len(KMAX) + 2L
+rR <- c(rR, "",
+        ".nnWgGenNames <- c(", paste0("  ", paste0("\"", allWgNames, "\"", collapse = ", ")), ")",
+        ".nnWgGenNargs <- c(", paste0("  ", paste(allWgNargs, collapse = ", ")), ")")
 ## rxD chains.  Each derivative-generating function returns the C-expression
 ## string for the derivative call, e.g.
 ##   function(id, x1, x2) paste0("nn2_d1(", id, ",", x1, ",", x2, ")")
@@ -100,6 +115,13 @@ for (K in seq_len(KMAX)) {
       character(1)))
     rR <- c(rR, sprintf("  rxD(\"nn%d_d%d\", list(%s))", K, j, paste(e2, collapse = ", ")))
   }
+  ## nnWg<K>: leaf for solving (weights are invisible to the symbolic engine and
+  ## the variational states are not differentiated further) -> constant deriv 0.0
+  ## for every argument (id, j, x1..xK).  Keeps the augmented model solvable with
+  ## a numeric Jacobian without a spurious symbolic derivative.
+  wgFormals <- paste(c("id", "j", argstr(K)), collapse = ", ")
+  entriesWg <- rep(sprintf("function(%s) \"0.0\"", wgFormals), K + 2L)
+  rR <- c(rR, sprintf("  rxD(\"nnWg%d\", list(%s))", K, paste(entriesWg, collapse = ", ")))
 }
 rR <- c(rR, "  invisible()", "}")
 writeLines(rR, "R/nnGen.R")

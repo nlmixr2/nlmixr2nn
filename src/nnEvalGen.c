@@ -20,6 +20,10 @@ double nn1_d1_d1(double id, double x1) {
   double x[1] = {x1};
   return nnHess((int) id, x, 0, 0);
 }
+double nnWg1(double id, double j, double x1) {
+  double x[1] = {x1};
+  return nnWeightGradJ((int) id, x, (int) j);
+}
 double nn2(double id, double x1, double x2) {
   double x[2] = {x1, x2};
   return nnForward((int) id, x);
@@ -43,6 +47,10 @@ double nn2_d1_d2(double id, double x1, double x2) {
 double nn2_d2_d2(double id, double x1, double x2) {
   double x[2] = {x1, x2};
   return nnHess((int) id, x, 1, 1);
+}
+double nnWg2(double id, double j, double x1, double x2) {
+  double x[2] = {x1, x2};
+  return nnWeightGradJ((int) id, x, (int) j);
 }
 double nn3(double id, double x1, double x2, double x3) {
   double x[3] = {x1, x2, x3};
@@ -83,6 +91,10 @@ double nn3_d2_d3(double id, double x1, double x2, double x3) {
 double nn3_d3_d3(double id, double x1, double x2, double x3) {
   double x[3] = {x1, x2, x3};
   return nnHess((int) id, x, 2, 2);
+}
+double nnWg3(double id, double j, double x1, double x2, double x3) {
+  double x[3] = {x1, x2, x3};
+  return nnWeightGradJ((int) id, x, (int) j);
 }
 double nn4(double id, double x1, double x2, double x3, double x4) {
   double x[4] = {x1, x2, x3, x4};
@@ -144,17 +156,23 @@ double nn4_d4_d4(double id, double x1, double x2, double x3, double x4) {
   double x[4] = {x1, x2, x3, x4};
   return nnHess((int) id, x, 3, 3);
 }
+double nnWg4(double id, double j, double x1, double x2, double x3, double x4) {
+  double x[4] = {x1, x2, x3, x4};
+  return nnWeightGradJ((int) id, x, (int) j);
+}
 
 void nnRegisterCallables(void) {
   R_RegisterCCallable("nlmixr2nn", "nn1", (DL_FUNC) &nn1);
   R_RegisterCCallable("nlmixr2nn", "nn1_d1", (DL_FUNC) &nn1_d1);
   R_RegisterCCallable("nlmixr2nn", "nn1_d1_d1", (DL_FUNC) &nn1_d1_d1);
+  R_RegisterCCallable("nlmixr2nn", "nnWg1", (DL_FUNC) &nnWg1);
   R_RegisterCCallable("nlmixr2nn", "nn2", (DL_FUNC) &nn2);
   R_RegisterCCallable("nlmixr2nn", "nn2_d1", (DL_FUNC) &nn2_d1);
   R_RegisterCCallable("nlmixr2nn", "nn2_d2", (DL_FUNC) &nn2_d2);
   R_RegisterCCallable("nlmixr2nn", "nn2_d1_d1", (DL_FUNC) &nn2_d1_d1);
   R_RegisterCCallable("nlmixr2nn", "nn2_d1_d2", (DL_FUNC) &nn2_d1_d2);
   R_RegisterCCallable("nlmixr2nn", "nn2_d2_d2", (DL_FUNC) &nn2_d2_d2);
+  R_RegisterCCallable("nlmixr2nn", "nnWg2", (DL_FUNC) &nnWg2);
   R_RegisterCCallable("nlmixr2nn", "nn3", (DL_FUNC) &nn3);
   R_RegisterCCallable("nlmixr2nn", "nn3_d1", (DL_FUNC) &nn3_d1);
   R_RegisterCCallable("nlmixr2nn", "nn3_d2", (DL_FUNC) &nn3_d2);
@@ -165,6 +183,7 @@ void nnRegisterCallables(void) {
   R_RegisterCCallable("nlmixr2nn", "nn3_d2_d2", (DL_FUNC) &nn3_d2_d2);
   R_RegisterCCallable("nlmixr2nn", "nn3_d2_d3", (DL_FUNC) &nn3_d2_d3);
   R_RegisterCCallable("nlmixr2nn", "nn3_d3_d3", (DL_FUNC) &nn3_d3_d3);
+  R_RegisterCCallable("nlmixr2nn", "nnWg3", (DL_FUNC) &nnWg3);
   R_RegisterCCallable("nlmixr2nn", "nn4", (DL_FUNC) &nn4);
   R_RegisterCCallable("nlmixr2nn", "nn4_d1", (DL_FUNC) &nn4_d1);
   R_RegisterCCallable("nlmixr2nn", "nn4_d2", (DL_FUNC) &nn4_d2);
@@ -180,5 +199,6 @@ void nnRegisterCallables(void) {
   R_RegisterCCallable("nlmixr2nn", "nn4_d3_d3", (DL_FUNC) &nn4_d3_d3);
   R_RegisterCCallable("nlmixr2nn", "nn4_d3_d4", (DL_FUNC) &nn4_d3_d4);
   R_RegisterCCallable("nlmixr2nn", "nn4_d4_d4", (DL_FUNC) &nn4_d4_d4);
+  R_RegisterCCallable("nlmixr2nn", "nnWg4", (DL_FUNC) &nnWg4);
 }
 

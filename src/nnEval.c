@@ -190,6 +190,23 @@ void nnWeightGrad(int id, const double *x, double *g) {
   nnWeightGradCore(w, w + H * K, w + H * K + H, K, H, act, x, g);
 }
 
+/* single weight-gradient element d(out)/d(w_j) at input x; reads par_ptr weights.
+   This is the forcing factor d(g)/d(w_j) for the NN-weight forward-sensitivity
+   variational state, used from the generated model via nnWg<K>(id, j, x...) so
+   the forcing b_ij = (dR_i/dg) * nnWg lives in the ODE RHS.  Computes the full
+   gradient into a local buffer and returns element j (fine for small nets; a
+   cached forward pass is a later optimization). */
+double nnWeightGradJ(int id, const double *x, int j) {
+  int K, H, act;
+  const double *w = nnWeights(id, &K, &H, &act);
+  if (w == NULL) return 0.0;
+  int nW = H * K + 2 * H + 1;
+  if (j < 0 || j >= nW) return 0.0;
+  double g[nW];
+  nnWeightGradCore(w, w + H * K, w + H * K + H, K, H, act, x, g);
+  return g[j];
+}
+
 /* test entry: compute the weight gradient from explicit weights (nnWeightLayout
    order) so the analytic formula can be validated without an active solve. */
 SEXP _nlmixr2nn_nnWeightGradW(SEXP K_, SEXP H_, SEXP act_, SEXP w, SEXP x) {

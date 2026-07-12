@@ -19,9 +19,10 @@
 }
 
 .nnTransRows <- function() {
-  ## probe helpers + the generated nn<K> family (.nnGenNames/.nnGenNargs, R/nnGen.R)
-  .rxFun <- c("nnprobe", "nnnpars", .nnGenNames)
-  .nargs <- c(2L, 1L, .nnGenNargs)
+  ## probe helpers + the generated nn<K> family and nnWg<K> weight-gradient family
+  ## (.nnGenNames/.nnGenNargs + .nnWgGenNames/.nnWgGenNargs, R/nnGen.R)
+  .rxFun <- c("nnprobe", "nnnpars", .nnGenNames, .nnWgGenNames)
+  .nargs <- c(2L, 1L, .nnGenNargs, .nnWgGenNargs)
   data.frame(
     rxFun = .rxFun,
     type  = paste0("rxode2_fn", ifelse(.nargs == 1L, "", as.character(.nargs))),
