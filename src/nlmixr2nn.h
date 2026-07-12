@@ -9,10 +9,13 @@ extern "C" {
 #endif
 
 typedef void (*nlmixr2nn_parLoader_t)(rx_solve *rx, double *gpars, int npars, int ncols);
+typedef void (*nlmixr2nn_dydtForce_t)(int *neq, double t, double *y, double *dydt);
 
 rx_solve *nlmixr2nnGetRxSolve(void);
 void nlmixr2nnRegisterLoader(nlmixr2nn_parLoader_t cb);
 void nlmixr2nnRemoveLoader(nlmixr2nn_parLoader_t cb);
+void nlmixr2nnRegisterDydtForce(nlmixr2nn_dydtForce_t cb);
+void nlmixr2nnRemoveDydtForce(nlmixr2nn_dydtForce_t cb);
 
 /* implemented in nnEval.c */
 void nnParLoader(rx_solve *rx, double *gpars, int npars, int ncols);

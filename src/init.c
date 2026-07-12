@@ -32,6 +32,9 @@ extern SEXP _nlmixr2nn_nnSetWeights(SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnClearMeta(void);
 extern SEXP _nlmixr2nn_nnUnregisterLoader(void);
 
+/* dydt forcing hook test entry (nnDydtForce.c) */
+extern SEXP _nlmixr2nn_testDydtForce(SEXP, SEXP, SEXP);
+
 /* torch backend (nnTorch.cpp) */
 extern SEXP _nlmixr2nn_nnTorchProbe(SEXP);
 extern SEXP _nlmixr2nn_nnTorchAvailable(void);
@@ -45,8 +48,8 @@ extern SEXP _nlmixr2nn_nnTorchSave(SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnTorchLoad(SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnTorchOptInit(SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnTorchZeroGrad(SEXP);
-extern SEXP _nlmixr2nn_nnTorchForwardBatch(SEXP, SEXP, SEXP);
-extern SEXP _nlmixr2nn_nnTorchBackward(SEXP, SEXP, SEXP, SEXP);
+extern SEXP _nlmixr2nn_nnTorchForwardBatch(SEXP, SEXP, SEXP, SEXP);
+extern SEXP _nlmixr2nn_nnTorchBackward(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnTorchGetGrad(SEXP);
 extern SEXP _nlmixr2nn_nnTorchStep(SEXP);
 
@@ -61,6 +64,7 @@ void R_init_nlmixr2nn(DllInfo *dll) {
     {"_nlmixr2nn_nnSetWeights",(DL_FUNC) &_nlmixr2nn_nnSetWeights, 2},
     {"_nlmixr2nn_nnClearMeta",(DL_FUNC) &_nlmixr2nn_nnClearMeta,0},
     {"_nlmixr2nn_nnUnregisterLoader",(DL_FUNC) &_nlmixr2nn_nnUnregisterLoader,0},
+    {"_nlmixr2nn_testDydtForce",(DL_FUNC) &_nlmixr2nn_testDydtForce,3},
     {"_nlmixr2nn_iniRxodePtrs",(DL_FUNC) &_nlmixr2nn_iniRxodePtrs,1},
     {"_nlmixr2nn_registerLoader",(DL_FUNC) &_nlmixr2nn_registerLoader,0},
     {"_nlmixr2nn_iniLikContrib",(DL_FUNC) &_nlmixr2nn_iniLikContrib,1},
@@ -79,8 +83,8 @@ void R_init_nlmixr2nn(DllInfo *dll) {
     {"_nlmixr2nn_nnTorchLoad",(DL_FUNC) &_nlmixr2nn_nnTorchLoad,2},
     {"_nlmixr2nn_nnTorchOptInit",(DL_FUNC) &_nlmixr2nn_nnTorchOptInit,3},
     {"_nlmixr2nn_nnTorchZeroGrad",(DL_FUNC) &_nlmixr2nn_nnTorchZeroGrad,1},
-    {"_nlmixr2nn_nnTorchForwardBatch",(DL_FUNC) &_nlmixr2nn_nnTorchForwardBatch,3},
-    {"_nlmixr2nn_nnTorchBackward",(DL_FUNC) &_nlmixr2nn_nnTorchBackward,4},
+    {"_nlmixr2nn_nnTorchForwardBatch",(DL_FUNC) &_nlmixr2nn_nnTorchForwardBatch,4},
+    {"_nlmixr2nn_nnTorchBackward",(DL_FUNC) &_nlmixr2nn_nnTorchBackward,5},
     {"_nlmixr2nn_nnTorchGetGrad",(DL_FUNC) &_nlmixr2nn_nnTorchGetGrad,1},
     {"_nlmixr2nn_nnTorchStep",(DL_FUNC) &_nlmixr2nn_nnTorchStep,1},
     {NULL, NULL, 0}

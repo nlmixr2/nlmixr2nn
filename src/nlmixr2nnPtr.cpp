@@ -25,4 +25,10 @@ extern "C" {
   void nlmixr2nnRemoveLoader(nlmixr2nn_parLoader_t cb) {
     if (rxRemoveParLoader != NULL) rxRemoveParLoader(cb);
   }
+  void nlmixr2nnRegisterDydtForce(nlmixr2nn_dydtForce_t cb) {
+    if (rxRegisterDydtForce != NULL) rxRegisterDydtForce(cb);
+  }
+  void nlmixr2nnRemoveDydtForce(nlmixr2nn_dydtForce_t cb) {
+    if (rxRemoveDydtForce != NULL) rxRemoveDydtForce(cb);
+  }
 }
