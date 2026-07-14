@@ -197,6 +197,12 @@
   }
 }
 
+## The nlm family: population-only optimizers (no between-subject variability).
+## Used both as warmStart choices and, when passed as the est of a model with an
+## nn() term, to trigger the no-BSV (QSP) population weight-fit path in .nnRun.
+.nnNlmOptimizers <- c("nlm", "nlminb", "optim", "lbfgsb3c", "n1qn1",
+                      "bobyqa", "newuoa", "uobyqa")
+
 ## Dispatch the population weight fit to any nlm-family optimizer -- nlm is simply
 ## an optimizer.  The gradient-based nlminb/nlm/optim(BFGS)/lbfgsb3c/n1qn1 use the
 ## analytic sensitivity gradient; the derivative-free minqa family bobyqa/newuoa/
@@ -357,6 +363,51 @@
   .th0 <- stats::setNames(.iniDf$est[!is.na(.iniDf$ntheta)], .iniDf$name[!is.na(.iniDf$ntheta)])
   .errPar0 <- list(add = if (is.na(.aug$errAdd)) 0 else unname(.th0[.aug$errAdd]),
                    prop = if (is.na(.aug$errProp)) 0 else unname(.th0[.aug$errProp]))
+
+  ## QSP / no between-subject variability: an nlm-family estimator is a pure
+  ## population optimizer -- it rejects random-effects models, and (unlike FOCEi)
+  ## its own solve does NOT read the injected NN weights, so the block-coordinate
+  ## loop cannot use it.  Instead fit the weights directly as a population problem
+  ## with that optimizer over the augmented sensitivity solve (which DOES read the
+  ## weights), then materialize the fit at the trained weights with FOCEi (which
+  ## reads them and estimates the residual error / any Omega; the weights are fixed
+  ## covariates).  This is "run an nlm-family optimizer without between-subject
+  ## variability" -- the weights are the optimized vector, no random effect.
+  if (.innerEst %in% .nnNlmOptimizers) {
+    if (.hasEta) {
+      message(sprintf(paste0("est=\"%s\" is population-only; the nn() random effect ",
+                             "is fit as a fixed effect (eta = 0)"), .innerEst))
+    }
+    .wFit <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder, .th0, .errPar0,
+                             nnTorchWeights(.aug$id), .innerEst, sched$rounds)
+    nnTorchSetWeights(.aug$id, .wFit)
+    nnSetMeta(.aug$id, .baseBase, .aug$K, .aug$H, .aug$act)       # base-model weight base
+    nnSetWeights(.aug$id, .wFit)
+    .dw <- .data
+    for (.j in seq_along(.aug$weights)) .dw[[.aug$weights[.j]]] <- .wFit[.j]
+    ## materialize the fit at the fixed trained weights (FOCEi reads them)
+    .matCtl <- nlmixr2est::foceiControl(print = 0L, calcTables = FALSE,
+                                        maxInnerIterations = if (.hasEta) 30L else 1L,
+                                        maxOuterIterations = 30L)
+    .fit <- suppressWarnings(suppressMessages(
+      nlmixr2est::nlmixr2(.ui, .dw, est = "focei", control = .matCtl)))
+    message(sprintf("nn: population (no-BSV) weight fit via %s, materialized with focei",
+                    .innerEst))
+    .trained <- stats::setNames(.wFit, .aug$weights)
+    .fit <- .nnAddTablesCov(.fit, .wFit, .baseBase, .aug, "focei", .origTablesCov)
+    .fitEnv <- .fit$env
+    .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
+    rxode2::rxForcedPars(.storedUi) <- .trained
+    assign("ui", .storedUi, envir = .fitEnv)
+    assign("nnParHist", data.frame(round = 1L, objf = .fit$objf,
+             errAdd = if (is.na(.aug$errAdd)) NA_real_ else .fit$theta[[.aug$errAdd]],
+             errProp = if (is.na(.aug$errProp)) NA_real_ else .fit$theta[[.aug$errProp]],
+             rmse = NA_real_, wChange = NA_real_, objfChange = NA_real_), envir = .fitEnv)
+    assign("nnWeights", .trained, envir = .fitEnv)
+    assign("nnConverged", TRUE, envir = .fitEnv)
+    assign("nnRounds", 1L, envir = .fitEnv)
+    return(.fit)
+  }
 
   ## the nlm bridge: a gradient-based population (eta=0) weight pre-fit seeding the
   ## joint fit with a robust weight vector (unless the model already carries
