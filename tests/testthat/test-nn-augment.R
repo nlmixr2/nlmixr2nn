@@ -6,6 +6,7 @@
 
 test_that("nnAugmentModel: variational states equal d(state)/d(weight) (FD check)", {
   skip_if_not_installed("rxode2")
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
   nnClearMeta(); nnSetMeta(0L, base = 0L, K = 2L, H = 1L, act = "tanh")  # nW = 5
   on.exit(nnClearMeta(), add = TRUE)

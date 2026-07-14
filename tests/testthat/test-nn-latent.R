@@ -9,6 +9,7 @@
 test_that("a latent-input NN random effect fits with analytic (non-FD) sensitivity", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   nnClearMeta(); on.exit(nnClearMeta(), add = TRUE)
   ## this test verifies a plain fixed-weight FOCEi fit identifies the latent eta, so
   ## disable the transparent-training interceptor for the duration.

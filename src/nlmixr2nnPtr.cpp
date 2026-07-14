@@ -20,7 +20,15 @@ extern "C" {
     return (getRxSolve_ != NULL) ? getRxSolve_() : (rx_solve *) NULL;
   }
   void nlmixr2nnRegisterLoader(nlmixr2nn_parLoader_t cb) {
-    if (rxRegisterParLoader != NULL) rxRegisterParLoader(cb);
+    // register NAMED so the nn weight loader runs ONLY for models flagged
+    // "nlmixr2nn:nnParLoader" (via rxParLoader()), never clobbering an unrelated
+    // model's par_ptr.  Fall back to the unnamed (always-run) registration on an
+    // older rxode2 that lacks the named entry.
+    if (rxRegisterParLoaderNamed != NULL) {
+      rxRegisterParLoaderNamed("nlmixr2nn:nnParLoader", cb);
+    } else if (rxRegisterParLoader != NULL) {
+      rxRegisterParLoader(cb);
+    }
   }
   void nlmixr2nnRemoveLoader(nlmixr2nn_parLoader_t cb) {
     if (rxRemoveParLoader != NULL) rxRemoveParLoader(cb);

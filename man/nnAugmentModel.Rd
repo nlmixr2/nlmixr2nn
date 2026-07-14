@@ -7,16 +7,20 @@
 nnAugmentModel(modelText, H)
 }
 \arguments{
-\item{modelText}{rxode2 model text containing one `g = nn<K>(id, ...)` output
-used in the ODE RHS.}
+\item{modelText}{rxode2 model text containing the `nn<K>(id, ...)` output(s).}
 
-\item{H}{hidden width of network `id` (weight count nW = H*K + 2H + 1).}
+\item{H}{hidden width: a scalar for a single network, or a vector named by
+network id (character) for multiple networks.}
 }
 \value{
 augmented model text (character scalar): the base model, `rx_drdg_*`
-  outputs (dR/dg per state), and the `rx_sw_<state>_<j>_` variational states
-  whose RHS is the F_X.s block (forcing added by the dydt-force hook).
+  outputs (dR/dg per state per network), and the `rx_sw_<state>_<globalj>_`
+  variational states whose RHS is the F_X.s block plus the per-network forcing.
 }
 \description{
-Build the forward-sensitivity augmented NN model text
+Supports one or more `nn<K>(id, ...)` outputs used in the ODE RHS.  The weight
+variational states are indexed by a GLOBAL weight index across all networks
+(network 0's weights first, then network 1's, ...), so a single-network model
+keeps the original `rx_sw_<state>_<j>_` layout; `rx_drdg_<state>_` gains a
+`<id>_` suffix only when more than one network is present.
 }

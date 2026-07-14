@@ -7,6 +7,7 @@
 
 test_that("dLL/dw from the augmented solve matches FD of the Gaussian log-likelihood", {
   skip_if_not_installed("rxode2")
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   nnClearMeta(); nnSetMeta(0L, base = 0L, K = 2L, H = 1L, act = "tanh")
   on.exit(nnClearMeta(), add = TRUE)
   wnm <- nnWeightLayout(0L, K = 2L, H = 1L); nW <- length(wnm)

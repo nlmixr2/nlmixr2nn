@@ -158,6 +158,25 @@ nnUpdate <- function(x) {
   invisible(do.call(rbind, info))
 }
 
+#' Run an expression with the nn parameter-loader active
+#'
+#' The nn weight loader is registered under the name `"nlmixr2nn:nnParLoader"` and
+#' runs only while it is the active injector, so it never overwrites an unrelated
+#' model's parameters.  The transparent `nlmixr2()` workflow activates it
+#' automatically; when solving a model that contains `nn()` DIRECTLY (`rxSolve()`
+#' after `nnUpdate()`/`nnSetWeights()`), wrap the solve in `nnWithLoader()` so the
+#' weights reach `par_ptr`.
+#'
+#' @param expr expression to evaluate with the nn loader active.
+#' @return the value of `expr`.
+#' @export
+#' @author Matthew L. Fidler
+nnWithLoader <- function(expr) {
+  .nnLoaderOn()
+  on.exit(.nnLoaderOff(), add = TRUE)
+  force(expr)
+}
+
 ## parameter names in solve (par_ptr) order
 .nnSolveParams <- function(x) {
   if (is.character(x)) return(x)

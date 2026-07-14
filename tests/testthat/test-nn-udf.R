@@ -6,6 +6,7 @@
 
 test_that("nn() expands to a compiled call and declares weights as covariates", {
   skip_if_not_installed("rxode2")
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   set.seed(3)
   mod <- function() {
     ini({ p <- 1 })
@@ -23,6 +24,7 @@ test_that("nn() expands to a compiled call and declares weights as covariates", 
 
 test_that("nnUpdate resolves a contiguous base from the solve parameter order", {
   skip_if_not_installed("rxode2")
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   set.seed(3)
   mod <- function() {
     ini({ p <- 1 })
@@ -38,6 +40,7 @@ test_that("nnUpdate resolves a contiguous base from the solve parameter order", 
 
 test_that("par-loader hook injects buffer weights into par_ptr each solve", {
   skip_if_not_installed("rxode2")
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   set.seed(11)
   mod <- function() {
     ini({ p <- 1 })

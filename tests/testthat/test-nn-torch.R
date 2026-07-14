@@ -11,6 +11,7 @@ skip_if_no_torch <- function() {
 
 test_that("torch module drives the ODE solve (solve == module forward)", {
   skip_if_no_torch()
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   mod <- function() {
     ini({ p <- 1 })
     model({ y <- nn(x, n_hidden = 5, act = "softplus"); d/dt(A) <- -p * A })
@@ -32,6 +33,7 @@ test_that("torch module drives the ODE solve (solve == module forward)", {
 
 test_that("torch weight get/set round-trips through the module", {
   skip_if_no_torch()
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   nnTorchInit(3, K = 2L, H = 4L, act = "tanh", seed = 7)
   on.exit(nnTorchFree(3), add = TRUE)
   w <- nnTorchWeights(3)
@@ -43,6 +45,7 @@ test_that("torch weight get/set round-trips through the module", {
 
 test_that("save / load restores a trained module", {
   skip_if_no_torch()
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   nnTorchInit(5, K = 1L, H = 3L, act = "relu", seed = 2)
   on.exit(nnTorchFree(5), add = TRUE)
   w <- nnTorchWeights(5)

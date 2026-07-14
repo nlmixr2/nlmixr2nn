@@ -1,3 +1,20 @@
+## The nn weight par-loader is registered under the NAME "nlmixr2nn:nnParLoader"
+## (see src/nlmixr2nnPtr.cpp), so rxode2 runs it ONLY while this injector is the
+## active flag -- otherwise it would clobber an unrelated model's par_ptr.  A model
+## carrying nn() is flagged on its ui (nnUpdate() sets rxParLoader()), which the
+## rxSolve.rxUi bridge honors; the estimation engine below also sets the flag
+## directly around its internal solves (inner fits + augmented solves) because they
+## bypass that bridge.  Both no-op gracefully on an older rxode2.
+.nnLoaderName <- "nlmixr2nn:nnParLoader"
+.nnLoaderOn <- function() {
+  tryCatch(.Call("_rxode2_rxSetActiveParLoader", .nnLoaderName, PACKAGE = "rxode2"),
+           error = function(e) NULL)
+}
+.nnLoaderOff <- function() {
+  tryCatch(.Call("_rxode2_rxClearActiveParLoader", PACKAGE = "rxode2"),
+           error = function(e) NULL)
+}
+
 ## NN-in-ODE training engine (.nnRun) for the transparent nlmixr2nn workflow.
 ## It is driven by nlmixr2nn's estimation interceptor (R/nnInterceptor.R): a model
 ## with an nn() term fitted with a standard est (focei/saem/...) is claimed here.
@@ -383,6 +400,12 @@
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
   if (!ok) stop("nlmixr2nn neural-network training requires the libtorch backend",
                 call. = FALSE)
+
+  ## activate the named nn par-loader for every solve done during training (the
+  ## inner fits + augmented solves bypass the rxSolve.rxUi flag bridge); cleared on
+  ## exit so it never leaks into an unrelated model's solve.
+  .nnLoaderOn()
+  on.exit(.nnLoaderOff(), add = TRUE)
 
   .aug <- .nnAugmentFromUi(.ui)
   .data <- nnCovData(.data)
