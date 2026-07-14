@@ -84,26 +84,38 @@ loss <- nnTorchTrain(id, X, target = sin(X), steps = 400L, lr = 0.05)
 c(first = loss[1], last = tail(loss, 1))
 ```
 
-## Population fitting: `est = "nn"` and `est = "nnIter"`
+## Population fitting: the transparent workflow
 
-You fit a mixed-effects model whose ODE contains an `nn()` term the same way you
-fit any other `nlmixr2` model. There are two estimators:
+You fit a mixed-effects model whose ODE contains an `nn()` term the *same way you
+fit any other* `nlmixr2` model -- with a **standard estimator** (`"focei"`,
+`"saem"`, ...). Loading `nlmixr2nn` registers an estimation interceptor that
+detects the `nn()` term and trains the embedded network transparently, using the
+estimator you chose as the inner engine. The only extra argument is `nn =
+nnControl(...)`, the network training *schedule* (it does **not** wrap the inner
+control):
 
-- **`est = "nn"` (joint)** -- co-optimizes the population parameters and the
+```{r, eval = FALSE}
+nlmixr2(model, data, "focei", foceiControl(...), nn = nnControl(...))
+```
+
+`nnControl(mode=)` picks how the network and the population parameters are
+optimized:
+
+- **`mode = "joint"`** (default) -- co-optimizes the population parameters and the
   network weights in one interleaved loop: each round takes a few *partial*,
   warm-started inner iterations and a torch weight step, so the parameters and
-  weights descend *together*. This is the DeepPumas-style approach and the
-  recommended default.
-- **`est = "nnIter"` (iterative)** -- runs a *full* inner fit each round with the
-  weights held fixed, then updates the weights: a simpler solve/update/solve
-  scheme. Useful when you want each round to be an ordinary, fully converged fit.
+  weights descend *together*. This is the DeepPumas-style approach. True
+  interleaving needs an inner estimator that exposes `maxOuterIterations` (the
+  FOCEi family); with any other estimator it degrades to the iterative loop.
+- **`mode = "iter"`** -- runs a *full* inner fit each round with the weights held
+  fixed, then updates the weights: a simpler solve/update/solve scheme. Useful
+  when you want each round to be an ordinary, fully converged fit.
 
-Both stop when the weights (and, for `"nn"`, the objective) stop changing between
-rounds -- `nnControl(tol=)` / `nnIterControl(tol=)` -- or at the maximum round
-count. The returned fit reports `$nnConverged`, `$nnRounds`, and `$nnParHist`
-(the per-round trace). Covariance and output tables are computed only once, on a
-final fit at the trained weights (the intermediate rounds skip them). Both are
-idiomatic in the same two ways.
+Both stop when the weights (and, for `"joint"`, the objective) stop changing
+between rounds -- `nnControl(tol=)` -- or at the maximum `rounds`. The returned
+fit reports `$nnConverged`, `$nnRounds`, and `$nnParHist` (the per-round trace).
+Covariance and output tables are added once, post-hoc, at the trained weights (the
+intermediate rounds skip them).
 
 **Universal differential equation (UDE) correction** -- keep the mechanistic
 structure you trust and let a small network absorb the part you do not:
@@ -140,9 +152,9 @@ In both cases the inter-individual variability enters as a *latent input* to the
 population network (`eta.nn` above): its inner sensitivity is the network's
 analytic input derivative, so it is identifiable and needs no finite differences.
 
-You fit with `nnControl()` (or `nnIterControl()`) wrapped around an ordinary inner
-control -- the inner estimator (here FOCEi) is inferred from it, and the
-neural-network schedule (`wSteps`, `lr`, `tol`, ...) rides alongside:
+You fit with an ordinary estimator (here FOCEi) and its ordinary control; the
+neural-network schedule (`mode`, `wSteps`, `lr`, `tol`, ...) rides alongside in
+`nn = nnControl(...)`:
 
 ```{r, eval = .hasTorch}
 nnClearMeta()
@@ -160,9 +172,10 @@ d <- do.call(rbind, lapply(1:6, function(id) {
              amt = c(10, 0, 0, 0, 0),
              dv = c(NA, 8, 6, 4, 2) + rnorm(5, 0, 0.1))
 }))
-ctl <- nnControl(nlmixr2est::foceiControl(print = 0L, maxInnerIterations = 10L),
-                 maxRounds = 10L, wSteps = 2L, lr = 0.03, tol = 1e-2, seed = 5)
-fit <- nlmixr2est::nlmixr2(mm, nnCovData(d), est = "nn", control = ctl)
+fit <- nlmixr2est::nlmixr2(mm, nnCovData(d), "focei",
+                           nlmixr2est::foceiControl(print = 0L, maxInnerIterations = 10L),
+                           nn = nnControl(mode = "joint", rounds = 10L, wSteps = 2L,
+                                          lr = 0.03, tol = 1e-2, seed = 5))
 ```
 
 The result is a standard `nlmixr2` fit: `fit$eta` holds the per-subject latent
@@ -171,10 +184,12 @@ are baked into the model as `rxForcedPars()` -- so `predict(fit)` and simulation
 reproduce them with no external torch/loader state (the fit is self-contained and
 portable, like a `nonmem2rx` model).
 
-The inner estimator is whatever you wrap: `nnControl(saemControl())` /
-`nnControl(impmapControl())` (and the `nnIterControl()` equivalents) run with SAEM
-or importance-sampling inner fits (the network weights reach the inner fit through
-the data, so no estimator-specific plumbing is needed).
+The inner estimator is whatever standard `est` you pass: `est = "saem"` or `est =
+"imp"` run the network training with SAEM or importance-sampling inner fits (the
+network weights reach the inner fit through the data, so no estimator-specific
+plumbing is needed). If the fitted model already carries trained weights (as
+`rxForcedPars`, e.g. a previous `nlmixr2nn` fit), those are used as the warm-start
+rather than a fresh random initialization.
 
 ## Inputs and activations
 

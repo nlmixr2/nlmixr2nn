@@ -1,15 +1,23 @@
-## est = "nnIter": the ITERATIVE (block-coordinate) NN-in-ODE estimator.  This is
-## NOT the DeepPumas joint optimization -- it is a solve/update/solve loop.
+## NN-in-ODE training engine (.nnRun) for the transparent nlmixr2nn workflow.
+## It is driven by nlmixr2nn's estimation interceptor (R/nnInterceptor.R): a model
+## with an nn() term fitted with a standard est (focei/saem/...) is claimed here.
 ##
-## Each round: (a) a FULL inner NLME fit of the BASE model with the current NN
-## weights held fixed (population Omega, residual error, per-subject latent EBEs),
-## then (b) a transient solve of the augmented (forward-sensitivity) model at those
-## EBEs to get d(rx_pred_)/dw, from which dLL/dw = sum_obs dLL/df * d(rx_pred_)/dw
-## drives a torch weight step.  The base model never carries sensitivity states;
-## the augmented model is built, solved, and discarded inside the loop.  The loop
-## repeats until the between-round weight change falls below `tol` or `rounds`.
+## Two modes (nnControl(mode=)):
+## * "iter" -- block-coordinate solve/update/solve: each round a FULL inner NLME
+##   fit of the BASE model with the weights held fixed, then torch weight steps.
+## * "joint" -- DeepPumas-style interleave: each round a warm-started PARTIAL inner
+##   step (outerPerRound outer iterations) + weight steps, co-descending the
+##   population parameters and the weights (only when the inner estimator exposes
+##   maxOuterIterations; otherwise it degrades to "iter").
 ##
-## The final fit is the last inner base-model nlmixr2FitData with the trained
+## Each round the weight gradient comes from a transient solve of the augmented
+## (forward-sensitivity) model at the inner EBEs: dLL/dw = sum_obs dLL/df *
+## d(rx_pred_)/dw.  The base model never carries sensitivity states; the augmented
+## model is built, solved, and discarded inside the loop.  The loop stops when the
+## between-round weight change (and, for "joint", the objective change) falls below
+## `tol`, or at `rounds`.
+##
+## The returned fit is the last inner base-model nlmixr2FitData with the trained
 ## weights attached as rxForcedPars so predict()/simulate() are self-contained.
 
 ## Parse the single (Gaussian) endpoint from the normalized model lines:
@@ -46,7 +54,7 @@
   .model <- rxode2::rxS(rxode2::rxGetModel(modelText), TRUE, promoteLinSens = FALSE)
   .p <- get0(predVar, envir = .model, inherits = FALSE)
   if (is.null(.p)) {
-    stop("est = 'nn': cannot resolve the prediction variable '", predVar, "'",
+    stop("nlmixr2nn: cannot resolve the prediction variable '", predVar, "'",
          call. = FALSE)
   }
   vapply(states, function(s) {
@@ -63,13 +71,13 @@
 .nnAugmentFromUi <- function(ui) {
   .reg <- .nnEnv$reg
   if (length(.reg) != 1L) {
-    stop("est = 'nn' currently supports exactly one nn() term", call. = FALSE)
+    stop("nlmixr2nn currently supportsexactly one nn() term", call. = FALSE)
   }
   .m <- .reg[[1L]]
   .lines <- ui$lstChr
   .end <- .nnErrEndpoint(.lines)
   if (is.null(.end)) {
-    stop("est = 'nn' currently supports a single additive endpoint (var ~ add(sd))",
+    stop("nlmixr2nn currently supportsa single additive endpoint (var ~ add(sd))",
          call. = FALSE)
   }
   ## drop the weight dummy-covariate declaration and the error line(s)
@@ -97,7 +105,7 @@
                                             promoteLinSens = FALSE))
   .dpds <- .nnDpDs(.augBase, .states, .end$state)
   if (all(.dpds == "0")) {
-    stop("est = 'nn': the prediction '", .end$state,
+    stop("nlmixr2nn: the prediction '", .end$state,
          "' does not depend on any ODE state -- nothing for the network to fit",
          call. = FALSE)
   }
@@ -121,8 +129,8 @@
 }
 
 ## The intermediate inner fits are throwaway, so their covariance/FIM and output
-## tables are skipped; the user's original settings are stashed and restored for
-## ONE final fit at the trained weights.  Shared by est="nnIter" and est="nn".
+## tables are skipped; the user's original settings are stashed and restored when
+## the tables + covariance are added post-hoc to the final fit.
 .nnStashTablesCov <- function(ctl) {
   list(calcTables = if (!is.null(ctl$calcTables)) ctl$calcTables else NULL,
        covMethod  = if (!is.null(ctl$covMethod))  ctl$covMethod  else NULL)
@@ -156,7 +164,7 @@
   fit
 }
 
-## Factory for one torch weight step, shared by est="nnIter" and est="nn".  Given
+## Factory for one torch weight step (shared by both nn training modes).  Given
 ## the augmented model + weight metadata and the fixed data pieces, returns a
 ## closure weightStep(ebes, errPar, thetas) that: sets the latent-eta covariates
 ## to the EBEs, solves the augmented model at the fitted thetas, forms the Gaussian
@@ -172,7 +180,7 @@
     .p <- c(thetas, wPlaceholder)
     .s <- rxode2::rxSolve(aug$mAug, .ad, params = .p, returnType = "data.frame")
     if (!all(aug$predswCols %in% names(.s))) {
-      stop("est = 'nn': augmented solve is missing the prediction-sensitivity ",
+      stop("nlmixr2nn: augmented solve is missing the prediction-sensitivity ",
            "columns (rx_predsw_*)", call. = FALSE)
     }
     .ik <- match(paste(data[[idCol]][obs], data$time[obs]), paste(.s$id, .s$time))
@@ -189,50 +197,49 @@
   }
 }
 
-#' nlmixr2 iterative estimation method for embedded neural networks (`est = "nnIter"`)
-#'
-#' Not called directly -- dispatched by `nlmixr2(..., est = "nnIter",
-#' control = nnIterControl(...))`.  Solve/update/solve: each round a full inner
-#' NLME fit with the weights fixed, then torch weight steps; repeated until the
-#' weights stop moving (`tol`) or `rounds` is reached.
-#' @param env nlmixr2 estimation environment.
-#' @param ... ignored.
-#' @return an `nlmixr2FitData` on the base model carrying the trained NN weights
-#'   (as `rxForcedPars`) and the training trace in `$nnParHist`.
-#' @exportS3Method nlmixr2est::nlmixr2Est
-nlmixr2Est.nnIter <- function(env, ...) {
-  .ui <- env$ui
+## Warm-start weights from a ui that already carries trained weights (as
+## rxForcedPars on the weight covariates -- a previous nn fit, or an nlm
+## population warm-start).  Returns the weight vector (aug$weights order) or NULL.
+.nnExistingWeights <- function(ui, aug) {
+  .fp <- tryCatch(rxode2::rxForcedPars(ui), error = function(e) NULL)
+  if (is.null(.fp)) return(NULL)
+  .w <- .fp[aug$weights]
+  if (length(.w) != aug$nW || anyNA(.w)) return(NULL)
+  unname(.w)
+}
+
+## Run the NN training loop.  `env` carries ui/data + the standard inner estimator
+## (class(env)[1]) and its control (env$control); `sched` is an nnControl().
+## mode="joint" interleaves warm-started PARTIAL inner steps (outerPerRound outer
+## iterations) with weight steps -- co-descending parameters and weights -- and
+## falls back to the block-coordinate iterate loop for inner estimators without a
+## partial outer step; mode="iter" runs a full inner fit each round.  The last
+## inner fit is the returned deliverable, with tables/covariance added post-hoc.
+.nnRun <- function(env, sched) {
+  .ui <- rxode2::rxUiDecompress(env$ui)
   .data <- env$data
-  .control <- env$control
-  if (!inherits(.control, "nnIterControl")) {
-    stop("est = 'nnIter' needs control = nnIterControl(...)", call. = FALSE)
-  }
-  .nn <- attr(.control, "nnIterControl")
-  .innerEst <- .nnInnerEst(.control)
-  .innerCtl <- .nnInnerControl(.control)
-  ## the intermediate fits are throwaway (only their EBEs + error params are
-  ## used): skip the per-round covariance/FIM and output tables -- both are
-  ## wasteful, and the covariance is often ill-conditioned at the round-1 random
-  ## weights.  The user's original table/cov settings are restored for ONE final
-  ## fit at the trained weights (see below).
+  .innerEst <- class(env)[1L]
+  ## env$control is already a validated control for .innerEst (nlmixr2() fills it
+  ## before dispatch), so it is used directly as the inner NLME control.
+  .innerCtl <- env$control
   .origTablesCov <- .nnStashTablesCov(.innerCtl)
   .innerCtl <- .nnDisableTablesCov(.innerCtl)
 
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) stop("est = 'nnIter' requires the libtorch backend (nnTorchAvailable() is FALSE)",
+  if (!ok) stop("nlmixr2nn neural-network training requires the libtorch backend",
                 call. = FALSE)
 
-  ## augmented (forward-sensitivity) model + weight-block metadata
   .aug <- .nnAugmentFromUi(.ui)
   .data <- nnCovData(.data)
-  ## the weight block sits at DIFFERENT par_ptr positions in the base model vs the
-  ## augmented model (the base has leading thetas), so the injection base must be
-  ## switched per context: `.baseBase` for the inner fit, `.aug$base` for the
-  ## augmented solve.  Using the wrong one feeds the network garbage (FOCEi limps
-  ## through it; SAEM's likelihood hits a non-PD matrix).
+  ## the weight block sits at DIFFERENT par_ptr positions in the base vs the
+  ## augmented model, so the injection base is switched per context (base-model
+  ## base for the inner fit, augmented base for the sensitivity solve).
   .baseBase <- nnUpdate(.ui)$base[1L]
-  nnTorchInit(.aug$id, .aug$K, .aug$H, act = .aug$act, seed = .nn$seed)
-  nnTorchOptInit(.aug$id, .nn$optimizer, .nn$lr)
+  nnTorchInit(.aug$id, .aug$K, .aug$H, act = .aug$act, seed = sched$seed)
+  ## warm start from existing built-in weights when the model already carries them
+  .existing <- .nnExistingWeights(.ui, .aug)
+  if (!is.null(.existing)) nnTorchSetWeights(.aug$id, .existing)
+  nnTorchOptInit(.aug$id, sched$optimizer, sched$lr)
   on.exit(tryCatch(nnTorchFree(.aug$id), silent = TRUE), add = TRUE)
 
   .idCol <- if ("ID" %in% names(.data)) "ID" else "id"
@@ -240,85 +247,85 @@ nlmixr2Est.nnIter <- function(env, ...) {
   .obs <- is.na(.obs) | .obs == 0
   .dv <- .data[[if ("DV" %in% names(.data)) "DV" else "dv"]]
   .wPlaceholder <- stats::setNames(rep(0, .aug$nW), .aug$weights)
-
   .weightStep <- .nnWeightStepper(.aug, .data, .idCol, .obs, .dv, .wPlaceholder)
+  .latent <- names(.aug$covMap)[1L]
 
-  ## warm-up: a naive-pooled step schedule at zero random effects, from the model
-  ## initial parameters, so the first inner fit sees a non-degenerate network.
-  if (.nn$warmSteps > 0L) {
+  ## true interleave only when the inner estimator exposes a partial outer step
+  .interleave <- sched$mode == "joint" && !is.null(.innerCtl$maxOuterIterations)
+  if (.interleave) .innerCtl$maxOuterIterations <- sched$outerPerRound
+  if (sched$mode == "joint" && !.interleave) {
+    message(sprintf("est=\"%s\" has no partial outer step; nn joint uses the iterative loop",
+                    .innerEst))
+  }
+
+  ## optional naive-pooled warm-up at eta=0 from the model initial parameters
+  if (sched$warmSteps > 0L) {
     .iniDf <- .ui$iniDf
-    .th0 <- stats::setNames(.iniDf$est[!is.na(.iniDf$ntheta)],
-                            .iniDf$name[!is.na(.iniDf$ntheta)])
+    .th0 <- stats::setNames(.iniDf$est[!is.na(.iniDf$ntheta)], .iniDf$name[!is.na(.iniDf$ntheta)])
     .errPar0 <- list(add = if (is.na(.aug$errAdd)) 0 else unname(.th0[.aug$errAdd]),
                      prop = if (is.na(.aug$errProp)) 0 else unname(.th0[.aug$errProp]))
     if (.errPar0$add == 0 && .errPar0$prop == 0) .errPar0$add <- 1
     .ids <- as.character(unique(.data[[.idCol]]))
     .ebes0 <- stats::setNames(rep(0, length(.ids)), .ids)
-    for (.ws in seq_len(.nn$warmSteps)) .weightStep(.ebes0, .errPar0, .th0)
+    for (.ws in seq_len(sched$warmSteps)) .weightStep(.ebes0, .errPar0, .th0)
   }
 
-  ## iterate solve/update/solve until the weights stop moving (relative
-  ## between-round change < tol) or `rounds` (the maximum) is reached.
-  .parHist <- vector("list", .nn$rounds)
+  .parHist <- vector("list", sched$rounds)
   .fit <- NULL
+  .curUi <- .ui
   .wPrev <- nnTorchWeights(.aug$id)
+  .objfPrev <- NA_real_
   .converged <- FALSE
   .nRun <- 0L
-  for (.round in seq_len(.nn$rounds)) {
+  for (.round in seq_len(sched$rounds)) {
     .nRun <- .round
-    ## Inject the current weights BOTH ways so the inner fit sees them regardless
-    ## of estimator: (a) the par-loader (FOCEi's solve hits rxCallParLoaders) via
-    ## nnSetWeights, and (b) the data covariate columns -- SAEM's estimation kernel
-    ## does NOT call the par-loader, so it reads the weights straight from the data.
+    ## inject the current weights BOTH ways (par-loader for FOCEi's solve + data
+    ## covariate columns for SAEM's kernel, which bypasses the loader).
     nnSetMeta(.aug$id, .baseBase, .aug$K, .aug$H, .aug$act)   # base-model weight base
     .w <- nnTorchWeights(.aug$id)
     nnSetWeights(.aug$id, .w)
     .dw <- .data
     for (.j in seq_along(.aug$weights)) .dw[[.aug$weights[.j]]] <- .w[.j]
+    ## interleave: warm-started PARTIAL step from the previous ui; else full fit
+    .fitUi <- if (.interleave) .curUi else .ui
     .fit <- suppressWarnings(suppressMessages(
-      nlmixr2est::nlmixr2(.ui, .dw, est = .innerEst, control = .innerCtl)))
-    .latent <- names(.aug$covMap)[1L]              # single latent eta name (MVP)
+      nlmixr2est::nlmixr2(.fitUi, .dw, est = .innerEst, control = .innerCtl)))
+    if (.interleave) .curUi <- .fit$ui                       # warm-start next round
     .ebes <- stats::setNames(.fit$eta[[.latent]], as.character(.fit$eta[["ID"]]))
     .thetas <- .fit$theta
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
                     prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
-    for (.ws in seq_len(.nn$wSteps)) .rmse <- .weightStep(.ebes, .errPar, .thetas)
-    ## relative change in the flattened weight vector since the last round
+    for (.ws in seq_len(sched$wSteps)) .rmse <- .weightStep(.ebes, .errPar, .thetas)
     .wNow <- nnTorchWeights(.aug$id)
     .wChange <- sqrt(sum((.wNow - .wPrev)^2)) / (sqrt(sum(.wPrev^2)) + 1e-8)
     .wPrev <- .wNow
+    .objfChange <- if (is.na(.objfPrev)) Inf else abs(.fit$objf - .objfPrev) / (abs(.objfPrev) + 1e-8)
+    .objfPrev <- .fit$objf
     .parHist[[.round]] <- data.frame(round = .round, objf = .fit$objf,
                                      errAdd = .errPar$add, errProp = .errPar$prop,
-                                     rmse = .rmse, wChange = .wChange)
-    if (.nn$tol > 0 && .wChange < .nn$tol) { .converged <- TRUE; break }
+                                     rmse = .rmse, wChange = .wChange, objfChange = .objfChange)
+    ## stop when the weights (and, when interleaving, the objective) stabilise
+    .stop <- .wChange < sched$tol && (!.interleave || .objfChange < sched$tol)
+    if (sched$tol > 0 && .round > 1L && .stop) { .converged <- TRUE; break }
   }
   .parHist <- .parHist[seq_len(.nRun)]
-  if (.converged) {
-    message(sprintf("nnIter converged after %d rounds (weight change %.2g < tol %.2g)",
-                    .nRun, .wChange, .nn$tol))
-  } else {
-    message(sprintf("nnIter stopped at the maximum %d rounds (weight change %.2g, tol %.2g)",
-                    .nRun, .wChange, .nn$tol))
-  }
+  message(sprintf("nn (%s) %s after %d rounds (weight change %.2g%s)",
+                  if (.interleave) "joint" else "iterative",
+                  if (.converged) "converged" else "stopped at max rounds", .nRun, .wChange,
+                  if (.interleave) sprintf(", objf change %.2g", .objfChange) else ""))
 
-  ## the last inner fit IS the returned deliverable (no re-fit); add the tables +
-  ## covariance to it post-hoc from the user's original control settings.
+  ## the last inner fit IS the deliverable (no re-fit); add tables + covariance
+  ## post-hoc from the user's original control settings.
   .trained <- stats::setNames(nnTorchWeights(.aug$id), .aug$weights)
-  .fit <- .nnAddTablesCov(.fit, nnTorchWeights(.aug$id), .baseBase, .aug,
-                          .innerEst, .origTablesCov)
-  ## bake the trained weights into the fit's ui as forcedPars so predict()/
-  ## simulate() reproduce them.  f$ui returns a CLONE, so write the ui STORED in
-  ## the fit env.
+  .fit <- .nnAddTablesCov(.fit, nnTorchWeights(.aug$id), .baseBase, .aug, .innerEst, .origTablesCov)
   .fitEnv <- .fit$env
   .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
   rxode2::rxForcedPars(.storedUi) <- .trained
   assign("ui", .storedUi, envir = .fitEnv)
-  ## store the NN metadata in the fit env (NOT via `$<-`, which would try to add a
-  ## data column); `fit$nnParHist` etc. fall back to the env.
+  ## NN metadata in the fit env (NOT $<-, which would add a data column)
   assign("nnParHist", do.call(rbind, .parHist), envir = .fitEnv)
   assign("nnWeights", .trained, envir = .fitEnv)
   assign("nnConverged", .converged, envir = .fitEnv)
   assign("nnRounds", .nRun, envir = .fitEnv)
   .fit
 }
-attr(nlmixr2Est.nnIter, "covariate") <- NULL

@@ -16,6 +16,9 @@
       .Call(`_nlmixr2nn_registerContrib`, PACKAGE = "nlmixr2nn")
     }
   }
+  ## transparent workflow: claim estimations of models containing nn() so a
+  ## standard est (focei/saem/...) trains the embedded network (R/nnInterceptor.R)
+  .nnRegisterInterceptor()
 }
 
 .nnTransRows <- function() {
@@ -68,7 +71,8 @@
   for (.nm in .nnTransRows()$rxFun) {
     suppressWarnings(try(rxRmFun(.nm), silent = TRUE))
   }
-  ## drop the par-loader hook + likelihood contribution before unloading our DLL
+  ## drop the estimation interceptor, par-loader hook + likelihood contribution
+  .nnUnregisterInterceptor()
   try(.Call(`_nlmixr2nn_nnUnregisterLoader`), silent = TRUE)
   try(.Call(`_nlmixr2nn_removeContrib`), silent = TRUE)
   library.dynam.unload("nlmixr2nn", libpath)

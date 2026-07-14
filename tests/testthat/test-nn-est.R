@@ -1,14 +1,18 @@
-## est = "nnIter": ITERATIVE solve/update/solve estimator (NOT the DeepPumas joint
-## optimization).  Data is Michaelis-Menten elimination with IIV in Vmax.
-## nlmixr2(..., est = "nnIter", nnIterControl(foceiControl)) alternates a FULL FOCEi
-## fit of the base latent-input model (residual error + latent Omega + per-subject
-## EBEs) with torch weight steps driven by the augmented forward-sensitivity solve,
-## repeating until the weights stop moving (tol) or `rounds`.  The network learns
-## the (nonlinear) population shape while the latent eta recovers the per-subject
-## Vmax variation.  The returned fit is a standard nlmixr2 fit carrying the trained
-## weights as rxForcedPars (self-contained predict/simulate) plus the trace.
+## Transparent nlmixr2nn workflow (ITERATIVE mode): a model with an nn() term is
+## fitted with a STANDARD estimator plus a pure nnControl() training schedule:
+##
+##   nlmixr2(model, data, "focei", foceiControl(...), nn = nnControl(mode = "iter", ...))
+##
+## nlmixr2nn's estimation interceptor claims the fit and runs solve/update/solve:
+## a FULL inner fit of the base latent-input model (residual error + latent Omega
+## + per-subject EBEs) with the weights fixed, then torch weight steps driven by
+## the augmented forward-sensitivity solve, repeating until the weights stop moving
+## (tol) or `rounds`.  The network learns the (nonlinear) population shape while
+## the latent eta recovers the per-subject variation.  The returned fit is a
+## standard nlmixr2 fit carrying the trained weights as rxForcedPars (self-
+## contained predict/simulate) plus the trace.
 
-test_that("est='nnIter' recovers the population NN shape + IIV and is self-contained", {
+test_that("iterative nn training recovers the population NN shape + IIV and is self-contained", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
@@ -37,11 +41,11 @@ test_that("est='nnIter' recovers the population NN shape + IIV and is self-conta
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
-  ctl <- nnIterControl(nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
-                                            maxInnerIterations = 25L, calcTables = FALSE),
-                   rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L)
   f <- suppressWarnings(suppressMessages(
-    nlmixr2est::nlmixr2(modF, nnCovData(data), est = "nnIter", control = ctl)))
+    nlmixr2est::nlmixr2(modF, nnCovData(data), "focei",
+      nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
+                               maxInnerIterations = 25L, calcTables = FALSE),
+      nn = nnControl(mode = "iter", rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L))))
 
   ## a standard nlmixr2 fit
   expect_true(inherits(f, "nlmixr2FitCore") || inherits(f, "nlmixr2FitData"))
@@ -66,7 +70,7 @@ test_that("est='nnIter' recovers the population NN shape + IIV and is self-conta
   expect_equal(length(rxode2::rxForcedPars(f$ui)), nW)
 })
 
-test_that("est='nnIter' injects NN input covariates into training (covariate-NN)", {
+test_that("iterative nn training injects NN input covariates (covariate-NN)", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
@@ -97,11 +101,11 @@ test_that("est='nnIter' injects NN input covariates into training (covariate-NN)
             d/dt(central) <- -cl * central
             central ~ add(add.sd) })
   }
-  ctl <- nnIterControl(nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
-                                            maxInnerIterations = 25L, calcTables = FALSE),
-                   rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L)
   f <- suppressWarnings(suppressMessages(
-    nlmixr2est::nlmixr2(modC, nnCovData(data), est = "nnIter", control = ctl)))
+    nlmixr2est::nlmixr2(modC, nnCovData(data), "focei",
+      nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
+                               maxInnerIterations = 25L, calcTables = FALSE),
+      nn = nnControl(mode = "iter", rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L))))
 
   expect_true(is.finite(f$objf))
   ebes <- setNames(f$eta$eta.nn, f$eta$ID)
@@ -115,7 +119,7 @@ test_that("est='nnIter' injects NN input covariates into training (covariate-NN)
   expect_lt(abs(clhat[3] / clhat[1] - exp(0.5 * 1.6)), 0.6)
 })
 
-test_that("est='nnIter' trains through an lhs endpoint (pred is a function of a state)", {
+test_that("iterative nn training goes through an lhs endpoint (pred is a function of a state)", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
@@ -144,11 +148,11 @@ test_that("est='nnIter' trains through an lhs endpoint (pred is a function of a 
             cp <- centr / 2                    # lhs prediction (not a state)
             cp ~ add(add.sd) })
   }
-  ctl <- nnIterControl(nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
-                                            maxInnerIterations = 25L, calcTables = FALSE),
-                   rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L)
   f <- suppressWarnings(suppressMessages(
-    nlmixr2est::nlmixr2(modL, nnCovData(data), est = "nnIter", control = ctl)))
+    nlmixr2est::nlmixr2(modL, nnCovData(data), "focei",
+      nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
+                               maxInnerIterations = 25L, calcTables = FALSE),
+      nn = nnControl(mode = "iter", rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L))))
 
   ## the weight gradient chains through d(cp)/d(centr): the network genuinely
   ## trains (residual driven down) rather than silently freezing on a zero grad.
@@ -158,7 +162,7 @@ test_that("est='nnIter' trains through an lhs endpoint (pred is a function of a 
   expect_gt(abs(cor(ebes[order(as.integer(names(ebes)))], etaTrue)), 0.8)
 })
 
-test_that("est='nnIter' trains under a proportional error model", {
+test_that("iterative nn training works under a proportional error model", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
@@ -186,11 +190,11 @@ test_that("est='nnIter' trains under a proportional error model", {
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ prop(prop.sd) })
   }
-  ctl <- nnIterControl(nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
-                                            maxInnerIterations = 25L, calcTables = FALSE),
-                   rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L)
   f <- suppressWarnings(suppressMessages(
-    nlmixr2est::nlmixr2(modP, nnCovData(data), est = "nnIter", control = ctl)))
+    nlmixr2est::nlmixr2(modP, nnCovData(data), "focei",
+      nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
+                               maxInnerIterations = 25L, calcTables = FALSE),
+      nn = nnControl(mode = "iter", rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L))))
 
   ## the proportional-error Gaussian cotangent trains the network + recovers IIV
   expect_true(is.finite(f$objf))
@@ -200,7 +204,7 @@ test_that("est='nnIter' trains under a proportional error model", {
   expect_gt(abs(cor(ebes[order(as.integer(names(ebes)))], etaTrue)), 0.6)
 })
 
-test_that("est='nnIter' works with a SAEM inner estimator", {
+test_that("iterative nn training works with a SAEM inner estimator", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
@@ -227,14 +231,13 @@ test_that("est='nnIter' works with a SAEM inner estimator", {
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
-  ## nnIterControl infers the inner estimator (SAEM) from the wrapped control; the
-  ## trained weights reach SAEM's estimation kernel via the data covariate columns
-  ## (SAEM does not call the rxode2 par-loader), and covMethod="" skips the
-  ## per-round covariance.
-  ctl <- nnIterControl(nlmixr2est::saemControl(print = 0L, nBurn = 150L, nEm = 150L),
-                   rounds = 6L, wSteps = 8L, lr = 0.03, seed = 5L)
+  ## the inner estimator is just the standard est ("saem"); the trained weights
+  ## reach SAEM's estimation kernel via the data covariate columns (SAEM does not
+  ## call the rxode2 par-loader), and covMethod="" skips the per-round covariance.
   f <- suppressWarnings(suppressMessages(
-    nlmixr2est::nlmixr2(modF, nnCovData(data), est = "nnIter", control = ctl)))
+    nlmixr2est::nlmixr2(modF, nnCovData(data), "saem",
+      nlmixr2est::saemControl(print = 0L, nBurn = 150L, nEm = 150L, covMethod = ""),
+      nn = nnControl(mode = "iter", rounds = 6L, wSteps = 8L, lr = 0.03, seed = 5L))))
 
   expect_true(is.finite(f$objf))
   ebes <- setNames(f$eta$eta.nn, f$eta$ID)
