@@ -1,11 +1,13 @@
-## est = "nn": the DeepPumas-style alternating estimator.
+## est = "nnIter": the ITERATIVE (block-coordinate) NN-in-ODE estimator.  This is
+## NOT the DeepPumas joint optimization -- it is a solve/update/solve loop.
 ##
-## Each round: (a) inner NLME fit of the BASE model with the current NN weights
-## injected (population Omega, residual error, per-subject latent EBEs), then
-## (b) a transient solve of the augmented (forward-sensitivity) model at those
+## Each round: (a) a FULL inner NLME fit of the BASE model with the current NN
+## weights held fixed (population Omega, residual error, per-subject latent EBEs),
+## then (b) a transient solve of the augmented (forward-sensitivity) model at those
 ## EBEs to get d(rx_pred_)/dw, from which dLL/dw = sum_obs dLL/df * d(rx_pred_)/dw
 ## drives a torch weight step.  The base model never carries sensitivity states;
-## the augmented model is built, solved, and discarded inside the loop.
+## the augmented model is built, solved, and discarded inside the loop.  The loop
+## repeats until the between-round weight change falls below `tol` or `rounds`.
 ##
 ## The final fit is the last inner base-model nlmixr2FitData with the trained
 ## weights attached as rxForcedPars so predict()/simulate() are self-contained.
@@ -118,23 +120,25 @@
        predswCols = sprintf("rx_predsw_%d_", seq_len(.nW) - 1L))
 }
 
-#' nlmixr2 estimation method for embedded neural networks (`est = "nn"`)
+#' nlmixr2 iterative estimation method for embedded neural networks (`est = "nnIter"`)
 #'
-#' Not called directly -- dispatched by `nlmixr2(..., est = "nn",
-#' control = nnControl(...))`.
+#' Not called directly -- dispatched by `nlmixr2(..., est = "nnIter",
+#' control = nnIterControl(...))`.  Solve/update/solve: each round a full inner
+#' NLME fit with the weights fixed, then torch weight steps; repeated until the
+#' weights stop moving (`tol`) or `rounds` is reached.
 #' @param env nlmixr2 estimation environment.
 #' @param ... ignored.
 #' @return an `nlmixr2FitData` on the base model carrying the trained NN weights
 #'   (as `rxForcedPars`) and the training trace in `$nnParHist`.
 #' @exportS3Method nlmixr2est::nlmixr2Est
-nlmixr2Est.nn <- function(env, ...) {
+nlmixr2Est.nnIter <- function(env, ...) {
   .ui <- env$ui
   .data <- env$data
   .control <- env$control
-  if (!inherits(.control, "nnControl")) {
-    stop("est = 'nn' needs control = nnControl(...)", call. = FALSE)
+  if (!inherits(.control, "nnIterControl")) {
+    stop("est = 'nnIter' needs control = nnIterControl(...)", call. = FALSE)
   }
-  .nn <- attr(.control, "nnControl")
+  .nn <- attr(.control, "nnIterControl")
   .innerEst <- .nnInnerEst(.control)
   .innerCtl <- .nnInnerControl(.control)
   ## the inner fits are intermediate (only their EBEs + error params are used):
@@ -149,7 +153,7 @@ nlmixr2Est.nn <- function(env, ...) {
   }
 
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) stop("est = 'nn' requires the libtorch backend (nnTorchAvailable() is FALSE)",
+  if (!ok) stop("est = 'nnIter' requires the libtorch backend (nnTorchAvailable() is FALSE)",
                 call. = FALSE)
 
   ## augmented (forward-sensitivity) model + weight-block metadata
@@ -218,9 +222,15 @@ nlmixr2Est.nn <- function(env, ...) {
     for (.ws in seq_len(.nn$warmSteps)) .weightStep(.ebes0, .errPar0, .th0)
   }
 
+  ## iterate solve/update/solve until the weights stop moving (relative
+  ## between-round change < tol) or `rounds` (the maximum) is reached.
   .parHist <- vector("list", .nn$rounds)
   .fit <- NULL
+  .wPrev <- nnTorchWeights(.aug$id)
+  .converged <- FALSE
+  .nRun <- 0L
   for (.round in seq_len(.nn$rounds)) {
+    .nRun <- .round
     ## Inject the current weights BOTH ways so the inner fit sees them regardless
     ## of estimator: (a) the par-loader (FOCEi's solve hits rxCallParLoaders) via
     ## nnSetWeights, and (b) the data covariate columns -- SAEM's estimation kernel
@@ -238,9 +248,22 @@ nlmixr2Est.nn <- function(env, ...) {
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
                     prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
     for (.ws in seq_len(.nn$wSteps)) .rmse <- .weightStep(.ebes, .errPar, .thetas)
+    ## relative change in the flattened weight vector since the last round
+    .wNow <- nnTorchWeights(.aug$id)
+    .wChange <- sqrt(sum((.wNow - .wPrev)^2)) / (sqrt(sum(.wPrev^2)) + 1e-8)
+    .wPrev <- .wNow
     .parHist[[.round]] <- data.frame(round = .round, objf = .fit$objf,
                                      errAdd = .errPar$add, errProp = .errPar$prop,
-                                     rmse = .rmse)
+                                     rmse = .rmse, wChange = .wChange)
+    if (.nn$tol > 0 && .wChange < .nn$tol) { .converged <- TRUE; break }
+  }
+  .parHist <- .parHist[seq_len(.nRun)]
+  if (.converged) {
+    message(sprintf("nnIter converged after %d rounds (weight change %.2g < tol %.2g)",
+                    .nRun, .wChange, .nn$tol))
+  } else {
+    message(sprintf("nnIter stopped at the maximum %d rounds (weight change %.2g, tol %.2g)",
+                    .nRun, .wChange, .nn$tol))
   }
 
   ## finalize: the last inner fit is the base-model fit; bake the trained weights
@@ -254,6 +277,8 @@ nlmixr2Est.nn <- function(env, ...) {
   assign("ui", .storedUi, envir = .fitEnv)
   .fit$nnParHist <- do.call(rbind, .parHist)
   .fit$nnWeights <- .trained
+  .fit$nnConverged <- .converged
+  .fit$nnRounds <- .nRun
   .fit
 }
-attr(nlmixr2Est.nn, "covariate") <- NULL
+attr(nlmixr2Est.nnIter, "covariate") <- NULL

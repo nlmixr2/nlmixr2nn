@@ -84,9 +84,9 @@ loss <- nnTorchTrain(id, X, target = sin(X), steps = 400L, lr = 0.05)
 c(first = loss[1], last = tail(loss, 1))
 ```
 
-## Population fitting with `est = "nn"`
+## Population fitting with `est = "nnIter"`
 
-`est = "nn"` fits a mixed-effects model whose ODE contains an `nn()` term the
+`est = "nnIter"` fits a mixed-effects model whose ODE contains an `nn()` term the
 same way you fit any other `nlmixr2` model. It is idiomatic to use it two ways.
 
 **Universal differential equation (UDE) correction** -- keep the mechanistic
@@ -124,7 +124,7 @@ In both cases the inter-individual variability enters as a *latent input* to the
 population network (`eta.nn` above): its inner sensitivity is the network's
 analytic input derivative, so it is identifiable and needs no finite differences.
 
-You fit with `nnControl()` wrapped around an ordinary inner control -- the inner
+You fit with `nnIterControl()` wrapped around an ordinary inner control -- the inner
 estimator (here FOCEi) is inferred from it, and the neural-network schedule
 (`rounds`, `wSteps`, `lr`) rides alongside:
 
@@ -144,10 +144,10 @@ d <- do.call(rbind, lapply(1:6, function(id) {
              amt = c(10, 0, 0, 0, 0),
              dv = c(NA, 8, 6, 4, 2) + rnorm(5, 0, 0.1))
 }))
-ctl <- nnControl(nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 3L,
+ctl <- nnIterControl(nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 3L,
                                           maxInnerIterations = 10L, calcTables = FALSE),
                  rounds = 2L, wSteps = 4L, lr = 0.03, seed = 5)
-fit <- nlmixr2est::nlmixr2(mm, nnCovData(d), est = "nn", control = ctl)
+fit <- nlmixr2est::nlmixr2(mm, nnCovData(d), est = "nnIter", control = ctl)
 ```
 
 The result is a standard `nlmixr2` fit: `fit$eta` holds the per-subject latent
@@ -156,8 +156,8 @@ are baked into the model as `rxForcedPars()` -- so `predict(fit)` and simulation
 reproduce them with no external torch/loader state (the fit is self-contained and
 portable, like a `nonmem2rx` model).
 
-The inner estimator is whatever you wrap: `nnControl(saemControl())` and
-`nnControl(impmapControl())` run the same alternating loop with SAEM or
+The inner estimator is whatever you wrap: `nnIterControl(saemControl())` and
+`nnIterControl(impmapControl())` run the same alternating loop with SAEM or
 importance-sampling inner fits (the network weights reach the inner fit through
 the data, so no estimator-specific plumbing is needed).
 
