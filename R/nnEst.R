@@ -135,21 +135,25 @@
   }
   ctl
 }
-.nnRestoreTablesCov <- function(ctl, stash) {
-  if (!is.null(stash$calcTables)) ctl$calcTables <- stash$calcTables
-  if (!is.null(stash$covMethod))  ctl$covMethod  <- stash$covMethod
-  ctl
-}
-
-## A final inner fit at the trained weights, with the user's original tables +
-## covariance, warm-started from `ui`.  Returns the fit (the returned deliverable).
-.nnFinalFit <- function(ui, data, weights, baseBase, aug, innerEst, finalCtl, idCol) {
+## Add output tables + covariance to the ALREADY-FITTED object post-hoc, from the
+## user's original control settings -- NO re-fitting.  addTable() computes the
+## residual/table columns; .setCov() computes the covariance at the converged
+## parameters (maxOuterIterations = 0, so no re-estimation).  The trained weights
+## must already be injected (data columns + loader) so both solves use them.
+.nnAddTablesCov <- function(fit, weights, baseBase, aug, innerEst, orig) {
   nnSetMeta(aug$id, baseBase, aug$K, aug$H, aug$act)
   nnSetWeights(aug$id, weights)
-  .dw <- data
-  for (.j in seq_along(aug$weights)) .dw[[aug$weights[.j]]] <- weights[.j]
-  suppressWarnings(suppressMessages(
-    nlmixr2est::nlmixr2(ui, .dw, est = innerEst, control = finalCtl)))
+  if (isTRUE(orig$calcTables)) {
+    fit <- tryCatch(nlmixr2est:::addTable(fit), error = function(e) fit)
+  }
+  .cm <- orig$covMethod
+  if (!is.null(.cm) && !identical(.cm, "") && grepl("focei?$|^i?focei?", innerEst)) {
+    ## post-hoc FOCEi covariance is a finite-difference r/s calc at the converged
+    ## estimates; `analytic`/other labels fall back to "r,s".
+    .post <- if (.cm %in% c("r,s", "r", "s")) .cm else "r,s"
+    tryCatch(nlmixr2est:::.setCov(fit, covMethod = .post), error = function(e) NULL)
+  }
+  fit
 }
 
 ## Factory for one torch weight step, shared by est="nnIter" and est="nn".  Given
@@ -297,12 +301,11 @@ nlmixr2Est.nnIter <- function(env, ...) {
                     .nRun, .wChange, .nn$tol))
   }
 
-  ## ONE final fit at the trained weights WITH the user's tables + covariance
-  ## (skipped during the iteration); this is the returned deliverable.
+  ## the last inner fit IS the returned deliverable (no re-fit); add the tables +
+  ## covariance to it post-hoc from the user's original control settings.
   .trained <- stats::setNames(nnTorchWeights(.aug$id), .aug$weights)
-  .finalCtl <- .nnRestoreTablesCov(.innerCtl, .origTablesCov)
-  .fit <- .nnFinalFit(.ui, .data, nnTorchWeights(.aug$id), .baseBase, .aug,
-                      .innerEst, .finalCtl, .idCol)
+  .fit <- .nnAddTablesCov(.fit, nnTorchWeights(.aug$id), .baseBase, .aug,
+                          .innerEst, .origTablesCov)
   ## bake the trained weights into the fit's ui as forcedPars so predict()/
   ## simulate() reproduce them.  f$ui returns a CLONE, so write the ui STORED in
   ## the fit env.

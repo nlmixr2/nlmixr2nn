@@ -183,15 +183,11 @@ nlmixr2Est.nn <- function(env, ...) {
                     .nRun, .wChange, .objfChange))
   }
 
-  ## ONE final fit at the trained weights WITH the user's tables + covariance
-  ## (skipped during the iteration), warm-started from the converged estimates.
+  ## the last inner fit IS the returned deliverable (no re-fit); add the tables +
+  ## covariance to it post-hoc from the user's original control settings.
   .trained <- stats::setNames(nnTorchWeights(.aug$id), .aug$weights)
-  .finalCtl <- .nnRestoreTablesCov(.innerCtl, .origTablesCov)
-  if (!is.null(.finalCtl$maxOuterIterations)) {
-    .finalCtl$maxOuterIterations <- .nnInnerControl(.control)$maxOuterIterations
-  }
-  .fit <- .nnFinalFit(.curUi, .data, nnTorchWeights(.aug$id), .baseBase, .aug,
-                      .innerEst, .finalCtl, .idCol)
+  .fit <- .nnAddTablesCov(.fit, nnTorchWeights(.aug$id), .baseBase, .aug,
+                          .innerEst, .origTablesCov)
   ## bake the trained weights into the fit's ui as forcedPars.
   .fitEnv <- .fit$env
   .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
