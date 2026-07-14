@@ -82,7 +82,11 @@ nn <- function(..., n_hidden = 5L,
   ## every solve.
   .before <- paste0("rx_nnw", id, "_ <- ", paste(wnames, collapse = " + "))
 
-  ## record layout so nnUpdate() resolves the base index and nnCovData() adds cols
+  ## record layout so nnUpdate() resolves the base index and nnCovData() adds cols.
+  ## The FIRST nn() of a model parse (num == 1) resets the registry, so networks
+  ## from a PREVIOUS model do not leak in (otherwise a later single-nn model would
+  ## still carry a stale id-1 network from an earlier multi-nn model).
+  if (num == 1L) .nnEnv$reg <- list()
   .nnEnv$reg[[as.character(id)]] <-
     list(id = id, K = K, H = H, act = act, weights = wnames)
 

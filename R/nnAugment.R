@@ -12,21 +12,20 @@
 ## This builds the augmented rxode2 model TEXT: base model + rx_drdg_ outputs +
 ## the F_X.s variational-state block.  The forcing term is left to the hook.
 
-## Parse a single `<out> = nn<K>(<id>, <in1>, <in2>, ...)` line from model text.
-.nnParseCall <- function(modelText) {
-  ## find the nn<K>(id, in1, ...) call ANYWHERE (it may be nested inside another
-  ## expression, e.g. `cl <- exp(nn2(0, WT, eta.nn))`), not only as a bare
-  ## assignment.  Inputs are simple names, so the call args contain no inner
-  ## parens.  nnWg<K> is not matched (a letter follows `nn`).
+## Parse ALL distinct `nn<K>(id, ...)` calls from model text, ordered by id (a
+## stable global weight layout).  Each entry is list(fn, K, id, inputs).
+.nnParseCallAll <- function(modelText) {
   .txt <- paste(modelText, collapse = "\n")
   .re <- "\\bnn([0-9]+)\\s*\\(([^()]*)\\)"
-  .hits <- regmatches(.txt, gregexpr(.re, .txt, perl = TRUE))[[1]]
+  .hits <- unique(regmatches(.txt, gregexpr(.re, .txt, perl = TRUE))[[1]])
   if (length(.hits) == 0L) stop("no `nn<K>(id, ...)` call found in model", call. = FALSE)
-  if (length(unique(.hits)) > 1L) stop("multiple nn() calls not yet supported", call. = FALSE)
-  .mm <- regmatches(.hits[[1L]], regexec(.re, .hits[[1L]], perl = TRUE))[[1]]
-  .args <- trimws(unlist(strsplit(.mm[[3L]], ",", fixed = TRUE)))
-  list(fn = paste0("nn", .mm[[2L]]), K = as.integer(.mm[[2L]]),
-       id = as.integer(.args[[1L]]), inputs = .args[-1L])
+  .calls <- lapply(.hits, function(h) {
+    .mm <- regmatches(h, regexec(.re, h, perl = TRUE))[[1]]
+    .args <- trimws(unlist(strsplit(.mm[[3L]], ",", fixed = TRUE)))
+    list(fn = paste0("nn", .mm[[2L]]), K = as.integer(.mm[[2L]]),
+         id = as.integer(.args[[1L]]), inputs = .args[-1L])
+  })
+  .calls[order(vapply(.calls, function(.c) .c$id, integer(1)))]
 }
 
 ## dR_i/dg per state: substitute the exact nn call expression with a fresh symbol
@@ -53,45 +52,57 @@
 
 #' Build the forward-sensitivity augmented NN model text
 #'
-#' @param modelText rxode2 model text containing one `g = nn<K>(id, ...)` output
-#'   used in the ODE RHS.
-#' @param H hidden width of network `id` (weight count nW = H*K + 2H + 1).
+#' Supports one or more `nn<K>(id, ...)` outputs used in the ODE RHS.  The weight
+#' variational states are indexed by a GLOBAL weight index across all networks
+#' (network 0's weights first, then network 1's, ...), so a single-network model
+#' keeps the original `rx_sw_<state>_<j>_` layout; `rx_drdg_<state>_` gains a
+#' `<id>_` suffix only when more than one network is present.
+#'
+#' @param modelText rxode2 model text containing the `nn<K>(id, ...)` output(s).
+#' @param H hidden width: a scalar for a single network, or a vector named by
+#'   network id (character) for multiple networks.
 #' @return augmented model text (character scalar): the base model, `rx_drdg_*`
-#'   outputs (dR/dg per state), and the `rx_sw_<state>_<j>_` variational states
-#'   whose RHS is the F_X.s block (forcing added by the dydt-force hook).
+#'   outputs (dR/dg per state per network), and the `rx_sw_<state>_<globalj>_`
+#'   variational states whose RHS is the F_X.s block plus the per-network forcing.
 #' @export
 nnAugmentModel <- function(modelText, H) {
-  .call <- .nnParseCall(modelText)
-  .K <- .call$K; .nW <- H * .K + 2L * H + 1L
+  .calls <- .nnParseCallAll(modelText)
+  .multi <- length(.calls) > 1L
   .model <- rxode2::rxS(rxode2::rxGetModel(modelText), TRUE, promoteLinSens = FALSE)
   .st <- rxode2::rxStateOde(.model); .ns <- length(.st)
-  invisible(rxode2::.rxJacobian(.model, .st))       ## F_X only
+  invisible(rxode2::.rxJacobian(.model, .st))       ## F_X only (shared by all nets)
   .fx <- function(i, k) {
     .d <- get0(paste0("rx__df_", .st[i], "_dy_", .st[k], "__"), envir = .model, inherits = FALSE)
     if (is.null(.d)) "0" else rxode2::rxFromSE(.d)
   }
-  .drdg <- .nnDrDg(.model, .st, .call)
-  .sw <- function(i, j) sprintf("rx_sw_%s_%d_", .st[i], j)
+  .hOf <- function(id) if (length(H) == 1L && is.null(names(H))) H else H[[as.character(id)]]
   .out <- unlist(strsplit(trimws(modelText), "\n", fixed = TRUE))
-  ## dR/dg outputs (read by the forcing hook)
-  for (i in seq_len(.ns)) .out <- c(.out, sprintf("rx_drdg_%s_ = %s", .st[i], .drdg[[i]]))
-  ## variational states: d/dt(s_ij) = sum_k F_X[i,k] s_kj + (dR_i/dg)(dg/dw_j)
-  ## where the forcing factor dg/dw_j = nnWg<K>(id, j, inputs) reads the live
-  ## (injected) weights at the current nn input; rx_drdg_<i>_ = dR_i/dg (above).
-  .ins <- paste(.call$inputs, collapse = ", ")
-  for (j in seq_len(.nW) - 1L) {
-    for (i in seq_len(.ns)) {
-      .terms <- character(0)
-      for (k in seq_len(.ns)) {
-        .f <- .fx(i, k)
-        if (!identical(.f, "0") && nzchar(.f))
-          .terms <- c(.terms, sprintf("(%s)*%s", .f, .sw(k, j)))
+  .gj <- 0L                                          # running global weight index
+  for (.call in .calls) {
+    .K <- .call$K; .Hn <- .hOf(.call$id); .nW <- .Hn * .K + 2L * .Hn + 1L
+    .drdg <- .nnDrDg(.model, .st, .call)
+    .suf <- if (.multi) sprintf("%d_", .call$id) else ""   # rx_drdg per-net suffix
+    ## dR/dg outputs (read by the variational-state forcing)
+    for (i in seq_len(.ns)) .out <- c(.out, sprintf("rx_drdg_%s_%s= %s", .st[i], .suf, .drdg[[i]]))
+    ## variational states: d/dt(s_ij) = sum_k F_X[i,k] s_kj + (dR_i/dg)(dg/dw_j)
+    ## where dg/dw_j = nnWg<K>(id, j, inputs) reads the live injected weights.
+    .ins <- paste(.call$inputs, collapse = ", ")
+    for (localj in seq_len(.nW) - 1L) {
+      for (i in seq_len(.ns)) {
+        .terms <- character(0)
+        for (k in seq_len(.ns)) {
+          .f <- .fx(i, k)
+          if (!identical(.f, "0") && nzchar(.f))
+            .terms <- c(.terms, sprintf("(%s)*rx_sw_%s_%d_", .f, .st[k], .gj + localj))
+        }
+        .fxs <- if (length(.terms)) paste(.terms, collapse = " + ") else "0"
+        .forcing <- sprintf("rx_drdg_%s_%s*nnWg%d(%d, %d, %s)",
+                            .st[i], .suf, .K, .call$id, localj, .ins)
+        .rhs <- if (identical(.fxs, "0")) .forcing else paste(.fxs, "+", .forcing)
+        .out <- c(.out, sprintf("d/dt(rx_sw_%s_%d_) = %s", .st[i], .gj + localj, .rhs))
       }
-      .fxs <- if (length(.terms)) paste(.terms, collapse = " + ") else "0"
-      .forcing <- sprintf("rx_drdg_%s_*nnWg%d(%d, %d, %s)", .st[i], .K, .call$id, j, .ins)
-      .rhs <- if (identical(.fxs, "0")) .forcing else paste(.fxs, "+", .forcing)
-      .out <- c(.out, sprintf("d/dt(%s) = %s", .sw(i, j), .rhs))
     }
+    .gj <- .gj + .nW
   }
   paste(.out, collapse = "\n")
 }

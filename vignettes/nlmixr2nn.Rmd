@@ -264,6 +264,30 @@ The same model fit with `est = "focei"` (which supports random effects) would ad
 per-subject eta; here, with `est = "bobyqa"`, it is a pure fixed-effects fit -- the
 right choice when the science says there is no between-subject variability.
 
+## Multiple networks in one model
+
+A model may contain several `nn()` terms; they are trained jointly in a single fit.
+Each network gets its own weight block and its own inputs (states, covariates, or a
+latent eta), and only its specified inputs are passed to it:
+
+```{r, eval = FALSE}
+twoNets <- function() {
+  ini({ add.sd <- 0.3 })
+  model({
+    ka <- exp(nn(WT,  n_hidden = 3L))     # network 0: WT  -> absorption
+    cl <- exp(nn(AGE, n_hidden = 3L))     # network 1: AGE -> clearance
+    d/dt(depot)   <- -ka * depot
+    d/dt(central) <-  ka * depot - cl * central
+    central ~ add(add.sd)
+  })
+}
+fit <- nlmixr2est::nlmixr2(twoNets, nnCovData(data), "bobyqa", nn = nnControl())
+```
+
+The weight sensitivities of all networks are carried in one augmented solve, and
+each network's weights are stepped by its own optimizer state; `fit$nnWeights`
+holds every network's trained weights.
+
 ## Inputs and activations
 
 The compiled family supports input dimensions `K = 1..4` -- pass several states

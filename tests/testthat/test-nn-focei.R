@@ -101,3 +101,51 @@ test_that("a QSP no-BSV NN model fits with the nlm family (population weight fit
     expect_gt(cor(simObs, trueTraj), 0.99)               # reproduces the true curve
   }
 })
+
+test_that("multiple nn() networks in one model train jointly", {
+  skip_on_cran()
+  skip_if_not_installed("rxode2")
+  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
+  if (!ok) skip("libtorch backend not available")
+  .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
+  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE); try(nnTorchFree(1L), silent = TRUE) }, add = TRUE)
+  rxode2::setRxThreads(1L)
+
+  ## a two-compartment system with TWO networks: ka = f(WT), cl = f(AGE); no BSV
+  set.seed(1); ns <- 8L; WTv <- runif(ns, -1, 1); AGEv <- runif(ns, -1, 1)
+  tm <- rxode2::rxode2(paste0("d/dt(depot) = -exp(0.4*WT)*depot; ",
+                              "d/dt(central) = exp(0.4*WT)*depot - exp(0.3*AGE)*central"))
+  data <- do.call(rbind, lapply(1:ns, function(id) {
+    s <- rxode2::rxSolve(tm, data.frame(id = id, time = c(0, 0.5, 1, 2, 4, 6, 8),
+           evid = c(1, rep(0, 6)), cmt = 1, amt = c(10, rep(0, 6)), WT = WTv[id], AGE = AGEv[id]),
+           returnType = "data.frame")
+    s <- s[s$time > 0, ]
+    data.frame(id = id, time = c(0, s$time), evid = c(1, rep(0, nrow(s))), cmt = 1,
+               amt = c(10, rep(0, nrow(s))), WT = WTv[id], AGE = AGEv[id],
+               dv = c(NA, s$central + rnorm(nrow(s), 0, 0.1)))
+  }))
+
+  nnClearMeta()
+  mod2 <- function() {
+    ini({ add.sd <- 0.3 })
+    model({ ka <- exp(nn(WT, n_hidden = 3L, act = "tanh"))    # network 0: WT -> ka
+            cl <- exp(nn(AGE, n_hidden = 3L, act = "tanh"))   # network 1: AGE -> cl
+            d/dt(depot) <- -ka * depot
+            d/dt(central) <- ka * depot - cl * central
+            central ~ add(add.sd) })
+  }
+  f <- suppressWarnings(suppressMessages(
+    nlmixr2est::nlmixr2(mod2, nnCovData(data), "bobyqa", nn = nnControl(rounds = 80L, seed = 5L))))
+
+  expect_true(is.finite(f$objf))
+  ## both networks' weights are carried (10 + 10) and baked as forcedPars
+  nW1 <- 3L * 1L + 2L * 3L + 1L
+  expect_equal(length(f$nnWeights), 2L * nW1)
+  expect_equal(length(rxode2::rxForcedPars(f$ui)), 2L * nW1)
+  ## both learned relationships reproduce the true two-compartment dynamics
+  d1 <- nnCovData(data.frame(time = c(0, 0.5, 1, 2, 4, 6, 8), evid = c(1, rep(0, 6)),
+                             cmt = 1, amt = c(10, rep(0, 6)), WT = 0.6, AGE = -0.5))
+  sim <- rxode2::rxSolve(f$finalUi, d1, returnType = "data.frame")
+  tru <- rxode2::rxSolve(tm, d1, returnType = "data.frame")
+  expect_gt(cor(sim$central[sim$time > 0], tru$central[tru$time > 0]), 0.99)
+})

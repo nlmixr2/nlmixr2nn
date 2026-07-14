@@ -70,17 +70,19 @@
 ## weight step needs.
 .nnAugmentFromUi <- function(ui) {
   .reg <- .nnEnv$reg
-  if (length(.reg) != 1L) {
-    stop("nlmixr2nn currently supportsexactly one nn() term", call. = FALSE)
+  if (length(.reg) == 0L) {
+    stop("nlmixr2nn: no nn() term found in the model", call. = FALSE)
   }
-  .m <- .reg[[1L]]
+  ## networks ordered by id -> a stable GLOBAL weight layout (net 0's weights, then
+  ## net 1's, ...), matching nnAugmentModel's rx_sw_<state>_<globalj>_ indexing.
+  .nets <- .reg[order(vapply(.reg, function(m) m$id, integer(1)))]
   .lines <- ui$lstChr
   .end <- .nnErrEndpoint(.lines)
   if (is.null(.end)) {
-    stop("nlmixr2nn currently supportsa single additive endpoint (var ~ add(sd))",
+    stop("nlmixr2nn currently supports a single additive endpoint (var ~ add(sd))",
          call. = FALSE)
   }
-  ## drop the weight dummy-covariate declaration and the error line(s)
+  ## drop the weight dummy-covariate declaration(s) and the error line(s)
   .keep <- .lines[!grepl("^\\s*rx_nnw[0-9]+_\\s*<-", .lines) & !grepl("~", .lines)]
   ## latent etas among the nn inputs -> covariate names (dots -> underscores)
   .etas <- ui$eta
@@ -88,19 +90,20 @@
   for (.e in .etas) {
     .keep <- gsub(paste0("\\b", gsub("\\.", "\\\\.", .e), "\\b"), .covMap[[.e]], .keep)
   }
-  ## the model's non-weight covariates are NN inputs too (e.g. WT in
-  ## `nn(WT, eta.nn)`) -- declare them so the augmented solve reads them from the
-  ## data, alongside the weight block and the latent-eta covariates.
-  .realCovs <- setdiff(ui$allCovs, .m$weights)
+  ## all networks' weights + the model's non-weight covariates (also NN inputs, e.g.
+  ## WT in `nn(WT, eta.nn)`) + the latent-eta covariates, declared so the augmented
+  ## solve reads them from the data.
+  .allW <- unlist(lapply(.nets, function(m) m$weights), use.names = FALSE)
+  .realCovs <- setdiff(ui$allCovs, .allW)
   .param <- paste0("param(",
-                   paste(c(.m$weights, .realCovs, unname(.covMap)), collapse = ", "), ")")
+                   paste(c(.allW, .realCovs, unname(.covMap)), collapse = ", "), ")")
   .augBase <- paste(c(.param, .keep), collapse = "\n")
-  .augText <- nnAugmentModel(.augBase, H = .m$H)
-  .nW <- .m$H * .m$K + 2L * .m$H + 1L
-  ## prediction forward sensitivity wrt each weight, chained through the states:
-  ## rx_predsw_<j>_ = sum_s d(pred)/d(s) * rx_sw_<s>_<j>_.  Emitting this as an lhs
-  ## makes the endpoint work whether it is a raw state or an lhs (e.g. cp=centr/V)
-  ## with no per-endpoint code in the weight step.
+  .H <- stats::setNames(vapply(.nets, function(m) as.integer(m$H), integer(1)),
+                        vapply(.nets, function(m) as.character(m$id), character(1)))
+  .augText <- nnAugmentModel(.augBase, H = .H)
+  .totW <- sum(vapply(.nets, function(m) as.integer(m$H * m$K + 2L * m$H + 1L), integer(1)))
+  ## prediction forward sensitivity wrt each GLOBAL weight, chained through the
+  ## states: rx_predsw_<globalj>_ = sum_s d(pred)/d(s) * rx_sw_<s>_<globalj>_.
   .states <- rxode2::rxStateOde(rxode2::rxS(rxode2::rxGetModel(.augBase), TRUE,
                                             promoteLinSens = FALSE))
   .dpds <- .nnDpDs(.augBase, .states, .end$state)
@@ -109,7 +112,7 @@
          "' does not depend on any ODE state -- nothing for the network to fit",
          call. = FALSE)
   }
-  .predsw <- vapply(seq_len(.nW) - 1L, function(j) {
+  .predsw <- vapply(seq_len(.totW) - 1L, function(j) {
     .terms <- character(0)
     for (.si in seq_along(.states)) {
       if (!identical(.dpds[[.si]], "0") && nzchar(.dpds[[.si]])) {
@@ -119,13 +122,24 @@
     sprintf("rx_predsw_%d_ = %s", j, paste(.terms, collapse = " + "))
   }, character(1))
   .augText <- paste(c(.augText, .predsw), collapse = "\n")
-  list(text = .augText,
-       mAug = rxode2::rxode2(.augText),
-       base = .nnWeightBase(rxode2::rxode2(.augBase), .m$id, .m$K, .m$H),
-       id = .m$id, K = .m$K, H = .m$H, act = .m$act,
-       weights = .m$weights, nW = .nW, covMap = .covMap, realCovs = .realCovs,
+  .mAugBase <- rxode2::rxode2(.augBase)
+  ## per-network metadata carrying the global-weight offset + the network's weight
+  ## base in the augmented base model (each net's block is contiguous there).
+  .off <- 0L
+  .netMeta <- lapply(.nets, function(m) {
+    .nWm <- as.integer(m$H * m$K + 2L * m$H + 1L)
+    .meta <- list(id = m$id, K = m$K, H = m$H, act = m$act, weights = m$weights, nW = .nWm,
+                  offset = .off, gIdx = .off + seq_len(.nWm),   # 1-based global indices
+                  augBase = .nnWeightBase(.mAugBase, m$id, m$K, m$H),
+                  predswCols = sprintf("rx_predsw_%d_", .off + seq_len(.nWm) - 1L))
+    .off <<- .off + .nWm
+    .meta
+  })
+  list(text = .augText, mAug = rxode2::rxode2(.augText),
+       covMap = .covMap, realCovs = .realCovs, weights = .allW, nW = .totW,
        endpoint = .end$state, errAdd = .end$add, errProp = .end$prop,
-       predswCols = sprintf("rx_predsw_%d_", seq_len(.nW) - 1L))
+       predswCols = sprintf("rx_predsw_%d_", seq_len(.totW) - 1L),
+       nets = .netMeta)
 }
 
 ## The intermediate inner fits are throwaway, so their covariance/FIM and output
@@ -148,9 +162,11 @@
 ## residual/table columns; .setCov() computes the covariance at the converged
 ## parameters (maxOuterIterations = 0, so no re-estimation).  The trained weights
 ## must already be injected (data columns + loader) so both solves use them.
-.nnAddTablesCov <- function(fit, weights, baseBase, aug, innerEst, orig) {
-  nnSetMeta(aug$id, baseBase, aug$K, aug$H, aug$act)
-  nnSetWeights(aug$id, weights)
+.nnAddTablesCov <- function(fit, weights, baseBases, aug, innerEst, orig) {
+  for (.net in aug$nets) {                       # each net at its base-model base
+    nnSetMeta(.net$id, baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+    nnSetWeights(.net$id, weights[.net$gIdx])
+  }
   if (isTRUE(orig$calcTables)) {
     fit <- tryCatch(nlmixr2est:::addTable(fit), error = function(e) fit)
   }
@@ -175,8 +191,10 @@
   function(ebes, errPar, thetas) {
     .ad <- data
     for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- ebes[as.character(.ad[[idCol]])]
-    nnSetMeta(aug$id, aug$base, aug$K, aug$H, aug$act)   # augmented weight base
-    nnSetWeights(aug$id, nnTorchWeights(aug$id))
+    for (.net in aug$nets) {                            # each net at its augmented base
+      nnSetMeta(.net$id, .net$augBase, .net$K, .net$H, .net$act)
+      nnSetWeights(.net$id, nnTorchWeights(.net$id))
+    }
     .p <- c(thetas, wPlaceholder)
     .s <- rxode2::rxSolve(aug$mAug, .ad, params = .p, returnType = "data.frame")
     if (!all(aug$predswCols %in% names(.s))) {
@@ -189,10 +207,12 @@
     .R <- errPar$add^2 + (errPar$prop * .f)^2
     .dRdf <- 2 * errPar$prop^2 * .f
     .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
-    .dLLdw <- vapply(aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
-    nnTorchZeroGrad(aug$id)
-    nnTorchSetGrad(aug$id, -.dLLdw)
-    nnTorchStep(aug$id)
+    for (.net in aug$nets) {                            # per-network gradient + step
+      .dLLdw <- vapply(.net$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
+      nnTorchZeroGrad(.net$id)
+      nnTorchSetGrad(.net$id, -.dLLdw)
+      nnTorchStep(.net$id)
+    }
     sqrt(mean(.resid^2))
   }
 }
@@ -212,8 +232,9 @@
 .nnNlmBase <- function(ui, aug) {
   .nTheta <- length(which(!ui$iniDf$fix))
   .order <- c(paste0("THETA[", seq_len(.nTheta), "]"), "DV", ui$allCovs)
-  .b <- match(aug$weights[1L], .order) - 1L
-  if (length(.b) != 1L || is.na(.b)) NA_integer_ else .b
+  .b <- vapply(aug$nets, function(.n) match(.n$weights[1L], .order) - 1L, integer(1))
+  if (anyNA(.b)) return(NULL)
+  stats::setNames(.b, vapply(aug$nets, function(.n) as.character(.n$id), character(1)))
 }
 
 ## Dispatch the population weight fit to any nlm-family optimizer -- nlm is simply
@@ -261,10 +282,13 @@
   if (errPar$add == 0 && errPar$prop == 0) errPar$add <- 1      # avoid R(f)=0
   .key <- paste(data[[idCol]][obs], data$time[obs])
   .dvObs <- dv[obs]
-  ## objective (-2 log-likelihood) + analytic gradient at weight vector w
+  ## objective (-2 log-likelihood) + analytic gradient at the GLOBAL weight vector w
+  ## (all networks concatenated in aug$nets order)
   .eval <- function(w) {
-    nnSetMeta(aug$id, aug$base, aug$K, aug$H, aug$act)          # augmented weight base
-    nnSetWeights(aug$id, w)
+    for (.net in aug$nets) {                                    # split w per net
+      nnSetMeta(.net$id, .net$augBase, .net$K, .net$H, .net$act)
+      nnSetWeights(.net$id, w[.net$gIdx])
+    }
     .s <- rxode2::rxSolve(aug$mAug, .ad, params = c(thetas, wPlaceholder),
                           returnType = "data.frame")
     .ik <- match(.key, paste(.s$id, .s$time))
@@ -297,6 +321,27 @@
   .w <- .fp[aug$weights]
   if (length(.w) != aug$nW || anyNA(.w)) return(NULL)
   unname(.w)
+}
+
+## The GLOBAL weight vector = every network's torch weights concatenated in
+## aug$nets order (matching the rx_sw/rx_predsw global index).
+.nnAllTorchWeights <- function(aug) {
+  unlist(lapply(aug$nets, function(.n) nnTorchWeights(.n$id)), use.names = FALSE)
+}
+## Push a GLOBAL weight vector back into each network's torch module (per gIdx).
+.nnSetAllTorchWeights <- function(aug, w) {
+  for (.net in aug$nets) nnTorchSetWeights(.net$id, w[.net$gIdx])
+  invisible()
+}
+## Inject the current torch weights into `data` covariate columns (all networks),
+## for estimators whose kernel reads covariates from the data rather than the
+## par-loader (e.g. SAEM).  Returns the updated data.
+.nnFillWeightCols <- function(aug, data) {
+  for (.net in aug$nets) {
+    .w <- nnTorchWeights(.net$id)
+    for (.j in seq_along(.net$weights)) data[[.net$weights[.j]]] <- .w[.j]
+  }
+  data
 }
 
 ## Which control field caps the inner outer iterations -- the knob that makes a
@@ -341,16 +386,22 @@
 
   .aug <- .nnAugmentFromUi(.ui)
   .data <- nnCovData(.data)
-  ## the weight block sits at DIFFERENT par_ptr positions in the base vs the
-  ## augmented model, so the injection base is switched per context (base-model
-  ## base for the inner fit, augmented base for the sensitivity solve).
-  .baseBase <- nnUpdate(.ui)$base[1L]
-  nnTorchInit(.aug$id, .aug$K, .aug$H, act = .aug$act, seed = sched$seed)
+  ## each network's weight block sits at DIFFERENT par_ptr positions in the base vs
+  ## the augmented model, so the injection base is switched per context (base-model
+  ## base per network for the inner fit, augmented base for the sensitivity solve).
+  .baseInfo <- nnUpdate(.ui)
+  .baseBases <- stats::setNames(.baseInfo$base, as.character(.baseInfo$id))
+  ## init one torch module per network (seed offset so distinct nets differ)
+  for (.i in seq_along(.aug$nets)) {
+    .net <- .aug$nets[[.i]]
+    .seed <- if (is.null(sched$seed)) NULL else as.integer(sched$seed + .i - 1L)
+    nnTorchInit(.net$id, .net$K, .net$H, act = .net$act, seed = .seed)
+    nnTorchOptInit(.net$id, sched$optimizer, sched$lr)
+  }
   ## warm start from existing built-in weights when the model already carries them
   .existing <- .nnExistingWeights(.ui, .aug)
-  if (!is.null(.existing)) nnTorchSetWeights(.aug$id, .existing)
-  nnTorchOptInit(.aug$id, sched$optimizer, sched$lr)
-  on.exit(tryCatch(nnTorchFree(.aug$id), silent = TRUE), add = TRUE)
+  if (!is.null(.existing)) .nnSetAllTorchWeights(.aug, .existing)
+  on.exit(for (.net in .aug$nets) tryCatch(nnTorchFree(.net$id), silent = TRUE), add = TRUE)
 
   .idCol <- if ("ID" %in% names(.data)) "ID" else "id"
   .obs <- .data[[if ("EVID" %in% names(.data)) "EVID" else "evid"]]
@@ -390,17 +441,18 @@
   ## optimizer without between-subject variability".
   if (.innerEst %in% .nnNlmOptimizers) {
     .wFit <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder, .th0, .errPar0,
-                             nnTorchWeights(.aug$id), .innerEst, sched$rounds)
-    nnTorchSetWeights(.aug$id, .wFit)
+                             .nnAllTorchWeights(.aug), .innerEst, sched$rounds)
+    .nnSetAllTorchWeights(.aug, .wFit)
     .trained <- stats::setNames(.wFit, .aug$weights)
-    .dw <- .data
-    for (.j in seq_along(.aug$weights)) .dw[[.aug$weights[.j]]] <- .wFit[.j]
-    .nlmBase <- if (.hasEta) NA_integer_ else .nnNlmBase(.ui, .aug)
-    if (!is.na(.nlmBase)) {
-      ## native nlm materialization: the nlm solve reads the weights at the nlm-model
-      ## base; nlm estimates the residual error at the fixed weights.
-      nnSetMeta(.aug$id, .nlmBase, .aug$K, .aug$H, .aug$act)
-      nnSetWeights(.aug$id, .wFit)
+    .dw <- .nnFillWeightCols(.aug, .data)
+    .nlmBases <- if (.hasEta) NULL else .nnNlmBase(.ui, .aug)
+    if (!is.null(.nlmBases)) {
+      ## native nlm materialization: the nlm solve reads each network's weights at
+      ## its nlm-model base; nlm estimates the residual error at the fixed weights.
+      for (.net in .aug$nets) {
+        nnSetMeta(.net$id, .nlmBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+        nnSetWeights(.net$id, .wFit[.net$gIdx])
+      }
       .matCtl <- .innerCtl
       if (!is.null(.matCtl$calcTables)) .matCtl$calcTables <- FALSE
       .fit <- suppressWarnings(suppressMessages(
@@ -415,8 +467,10 @@
         message(sprintf(paste0("est=\"%s\" is population-only; the nn() random effect ",
                                "is materialized with focei"), .innerEst))
       }
-      nnSetMeta(.aug$id, .baseBase, .aug$K, .aug$H, .aug$act)
-      nnSetWeights(.aug$id, .wFit)
+      for (.net in .aug$nets) {
+        nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+        nnSetWeights(.net$id, .wFit[.net$gIdx])
+      }
       .matCtl <- nlmixr2est::foceiControl(print = 0L, calcTables = FALSE,
                                           maxInnerIterations = if (.hasEta) 30L else 1L,
                                           maxOuterIterations = 30L)
@@ -426,7 +480,7 @@
       message(sprintf("nn: population (no-BSV) weight fit via %s, materialized with focei",
                       .innerEst))
     }
-    .fit <- .nnAddTablesCov(.fit, .wFit, .baseBase, .aug, .matEst, .origTablesCov)
+    .fit <- .nnAddTablesCov(.fit, .wFit, .baseBases, .aug, .matEst, .origTablesCov)
     .fitEnv <- .fit$env
     .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
     rxode2::rxForcedPars(.storedUi) <- .trained
@@ -446,9 +500,9 @@
   ## trained weights, in which case those are the warm start).
   if (!identical(sched$warmStart, "none") && is.null(.existing)) {
     .wPop <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder,
-                             .th0, .errPar0, nnTorchWeights(.aug$id),
+                             .th0, .errPar0, .nnAllTorchWeights(.aug),
                              sched$warmStart, sched$warmPopIters)
-    nnTorchSetWeights(.aug$id, .wPop)
+    .nnSetAllTorchWeights(.aug, .wPop)
     message(sprintf("nn: population (nlm-bridge, %s) warm start applied", sched$warmStart))
   }
 
@@ -464,19 +518,19 @@
   .parHist <- vector("list", sched$rounds)
   .fit <- NULL
   .curUi <- .ui
-  .wPrev <- nnTorchWeights(.aug$id)
+  .wPrev <- .nnAllTorchWeights(.aug)
   .objfPrev <- NA_real_
   .converged <- FALSE
   .nRun <- 0L
   for (.round in seq_len(sched$rounds)) {
     .nRun <- .round
-    ## inject the current weights BOTH ways (par-loader for FOCEi's solve + data
-    ## covariate columns for SAEM's kernel, which bypasses the loader).
-    nnSetMeta(.aug$id, .baseBase, .aug$K, .aug$H, .aug$act)   # base-model weight base
-    .w <- nnTorchWeights(.aug$id)
-    nnSetWeights(.aug$id, .w)
-    .dw <- .data
-    for (.j in seq_along(.aug$weights)) .dw[[.aug$weights[.j]]] <- .w[.j]
+    ## inject each network's current weights BOTH ways (par-loader for FOCEi's solve
+    ## + data covariate columns for SAEM's kernel, which bypasses the loader).
+    for (.net in .aug$nets) {
+      nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+      nnSetWeights(.net$id, nnTorchWeights(.net$id))
+    }
+    .dw <- .nnFillWeightCols(.aug, .data)
     ## interleave: warm-started PARTIAL step from the previous ui; else full fit
     .fitUi <- if (.interleave) .curUi else .ui
     .roundCtl <- .innerCtl
@@ -491,7 +545,7 @@
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
                     prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
     for (.ws in seq_len(sched$wSteps)) .rmse <- .weightStep(.ebes, .errPar, .thetas)
-    .wNow <- nnTorchWeights(.aug$id)
+    .wNow <- .nnAllTorchWeights(.aug)
     .wChange <- sqrt(sum((.wNow - .wPrev)^2)) / (sqrt(sum(.wPrev^2)) + 1e-8)
     .wPrev <- .wNow
     .objfChange <- if (is.na(.objfPrev)) Inf else abs(.fit$objf - .objfPrev) / (abs(.objfPrev) + 1e-8)
@@ -512,8 +566,9 @@
 
   ## the last inner fit IS the deliverable (no re-fit); add tables + covariance
   ## post-hoc from the user's original control settings.
-  .trained <- stats::setNames(nnTorchWeights(.aug$id), .aug$weights)
-  .fit <- .nnAddTablesCov(.fit, nnTorchWeights(.aug$id), .baseBase, .aug, .innerEst, .origTablesCov)
+  .allW <- .nnAllTorchWeights(.aug)
+  .trained <- stats::setNames(.allW, .aug$weights)
+  .fit <- .nnAddTablesCov(.fit, .allW, .baseBases, .aug, .innerEst, .origTablesCov)
   .fitEnv <- .fit$env
   .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
   rxode2::rxForcedPars(.storedUi) <- .trained
