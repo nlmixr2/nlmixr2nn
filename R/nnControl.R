@@ -85,23 +85,23 @@ getValidNlmixrCtl.nnIter <- function(control) {
   .ctl
 }
 
-## the inner estimator name inferred from an nnIterControl's inherited class stack
-## (the first *Control class that is not nnIterControl), e.g. "focei".
+## the inner estimator name inferred from an nn(Iter)Control's inherited class
+## stack (the first *Control class that is not one of ours), e.g. "focei".
 .nnInnerEst <- function(control) {
-  .cls <- class(control)
-  .cls <- .cls[.cls != "nnIterControl"]
+  .cls <- setdiff(class(control), c("nnControl", "nnIterControl"))
   .w <- grep("Control$", .cls, value = TRUE)
   if (length(.w) == 0L) {
-    stop("could not infer the inner estimator from the nnIterControl", call. = FALSE)
+    stop("could not infer the inner estimator from the nn control", call. = FALSE)
   }
   sub("Control$", "", .w[1])
 }
 
-## the plain inner control (drop the nnIterControl class + attribute) to hand to
-## the inner estimator unchanged.
+## the plain inner control (drop our wrapper class + attributes) to hand to the
+## inner estimator unchanged.
 .nnInnerControl <- function(control) {
   .ctl <- control
+  attr(.ctl, "nnControl") <- NULL
   attr(.ctl, "nnIterControl") <- NULL
-  class(.ctl) <- setdiff(class(.ctl), "nnIterControl")
+  class(.ctl) <- setdiff(class(.ctl), c("nnControl", "nnIterControl"))
   .ctl
 }

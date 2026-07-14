@@ -120,6 +120,71 @@
        predswCols = sprintf("rx_predsw_%d_", seq_len(.nW) - 1L))
 }
 
+## The intermediate inner fits are throwaway, so their covariance/FIM and output
+## tables are skipped; the user's original settings are stashed and restored for
+## ONE final fit at the trained weights.  Shared by est="nnIter" and est="nn".
+.nnStashTablesCov <- function(ctl) {
+  list(calcTables = if (!is.null(ctl$calcTables)) ctl$calcTables else NULL,
+       covMethod  = if (!is.null(ctl$covMethod))  ctl$covMethod  else NULL)
+}
+.nnDisableTablesCov <- function(ctl) {
+  if (!is.null(ctl$calcTables)) ctl$calcTables <- FALSE
+  if (!is.null(ctl$covMethod) &&
+        (inherits(ctl, "foceiControl") || inherits(ctl, "saemControl"))) {
+    ctl$covMethod <- ""
+  }
+  ctl
+}
+.nnRestoreTablesCov <- function(ctl, stash) {
+  if (!is.null(stash$calcTables)) ctl$calcTables <- stash$calcTables
+  if (!is.null(stash$covMethod))  ctl$covMethod  <- stash$covMethod
+  ctl
+}
+
+## A final inner fit at the trained weights, with the user's original tables +
+## covariance, warm-started from `ui`.  Returns the fit (the returned deliverable).
+.nnFinalFit <- function(ui, data, weights, baseBase, aug, innerEst, finalCtl, idCol) {
+  nnSetMeta(aug$id, baseBase, aug$K, aug$H, aug$act)
+  nnSetWeights(aug$id, weights)
+  .dw <- data
+  for (.j in seq_along(aug$weights)) .dw[[aug$weights[.j]]] <- weights[.j]
+  suppressWarnings(suppressMessages(
+    nlmixr2est::nlmixr2(ui, .dw, est = innerEst, control = finalCtl)))
+}
+
+## Factory for one torch weight step, shared by est="nnIter" and est="nn".  Given
+## the augmented model + weight metadata and the fixed data pieces, returns a
+## closure weightStep(ebes, errPar, thetas) that: sets the latent-eta covariates
+## to the EBEs, solves the augmented model at the fitted thetas, forms the Gaussian
+## cotangent dLL/df for variance R(f)=add^2+(prop*f)^2, assembles
+## dLL/dw = sum_obs dLL/df * rx_predsw, and takes one torch optimizer step.
+## Returns the RMSE.
+.nnWeightStepper <- function(aug, data, idCol, obs, dv, wPlaceholder) {
+  function(ebes, errPar, thetas) {
+    .ad <- data
+    for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- ebes[as.character(.ad[[idCol]])]
+    nnSetMeta(aug$id, aug$base, aug$K, aug$H, aug$act)   # augmented weight base
+    nnSetWeights(aug$id, nnTorchWeights(aug$id))
+    .p <- c(thetas, wPlaceholder)
+    .s <- rxode2::rxSolve(aug$mAug, .ad, params = .p, returnType = "data.frame")
+    if (!all(aug$predswCols %in% names(.s))) {
+      stop("est = 'nn': augmented solve is missing the prediction-sensitivity ",
+           "columns (rx_predsw_*)", call. = FALSE)
+    }
+    .ik <- match(paste(data[[idCol]][obs], data$time[obs]), paste(.s$id, .s$time))
+    .f <- .s[[aug$endpoint]][.ik]
+    .resid <- dv[obs] - .f
+    .R <- errPar$add^2 + (errPar$prop * .f)^2
+    .dRdf <- 2 * errPar$prop^2 * .f
+    .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
+    .dLLdw <- vapply(aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
+    nnTorchZeroGrad(aug$id)
+    nnTorchSetGrad(aug$id, -.dLLdw)
+    nnTorchStep(aug$id)
+    sqrt(mean(.resid^2))
+  }
+}
+
 #' nlmixr2 iterative estimation method for embedded neural networks (`est = "nnIter"`)
 #'
 #' Not called directly -- dispatched by `nlmixr2(..., est = "nnIter",
@@ -141,16 +206,13 @@ nlmixr2Est.nnIter <- function(env, ...) {
   .nn <- attr(.control, "nnIterControl")
   .innerEst <- .nnInnerEst(.control)
   .innerCtl <- .nnInnerControl(.control)
-  ## the inner fits are intermediate (only their EBEs + error params are used):
-  ## skip the per-round covariance/FIM and output tables -- both are wasteful, and
-  ## the covariance is often ill-conditioned at the round-1 random weights.
-  if (!is.null(.innerCtl$calcTables)) .innerCtl$calcTables <- FALSE
-  ## covMethod = "" disables covariance for foceiControl and saemControl (needs
-  ## nlmixr2est with the saemControl("") fix).
-  if (!is.null(.innerCtl$covMethod) &&
-        (inherits(.innerCtl, "foceiControl") || inherits(.innerCtl, "saemControl"))) {
-    .innerCtl$covMethod <- ""
-  }
+  ## the intermediate fits are throwaway (only their EBEs + error params are
+  ## used): skip the per-round covariance/FIM and output tables -- both are
+  ## wasteful, and the covariance is often ill-conditioned at the round-1 random
+  ## weights.  The user's original table/cov settings are restored for ONE final
+  ## fit at the trained weights (see below).
+  .origTablesCov <- .nnStashTablesCov(.innerCtl)
+  .innerCtl <- .nnDisableTablesCov(.innerCtl)
 
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
   if (!ok) stop("est = 'nnIter' requires the libtorch backend (nnTorchAvailable() is FALSE)",
@@ -175,38 +237,7 @@ nlmixr2Est.nnIter <- function(env, ...) {
   .dv <- .data[[if ("DV" %in% names(.data)) "DV" else "dv"]]
   .wPlaceholder <- stats::setNames(rep(0, .aug$nW), .aug$weights)
 
-  ## one torch weight step from the per-subject EBEs + current error parameters.
-  ## `errPar` = list(add, prop) fitted residual-error params; the Gaussian
-  ## cotangent dLL/df for variance R(f) = add^2 + (prop*f)^2 is
-  ##   dLL/df = (dv-f)/R + 0.5*((dv-f)^2/R^2 - 1/R) * dR/df,  dR/df = 2*prop^2*f,
-  ## covering additive, proportional and combined error (additive reduces to
-  ## (dv-f)/add^2).  `thetas` are the fitted population parameters -- supplied so
-  ## NN inputs that are computed parameters take their fitted values; NN input
-  ## covariates ride in the data.
-  .weightStep <- function(ebes, errPar, thetas) {
-    .ad <- .data
-    for (.e in names(.aug$covMap)) .ad[[.aug$covMap[[.e]]]] <- ebes[as.character(.ad[[.idCol]])]
-    nnSetMeta(.aug$id, .aug$base, .aug$K, .aug$H, .aug$act)   # augmented weight base
-    nnSetWeights(.aug$id, nnTorchWeights(.aug$id))
-    .p <- c(thetas, .wPlaceholder)
-    .s <- rxode2::rxSolve(.aug$mAug, .ad, params = .p, returnType = "data.frame")
-    if (!all(.aug$predswCols %in% names(.s))) {
-      stop("est = 'nn': augmented solve is missing the prediction-sensitivity ",
-           "columns (rx_predsw_*)", call. = FALSE)
-    }
-    .ik <- match(paste(.data[[.idCol]][.obs], .data$time[.obs]),
-                 paste(.s$id, .s$time))
-    .f <- .s[[.aug$endpoint]][.ik]
-    .resid <- .dv[.obs] - .f
-    .R <- errPar$add^2 + (errPar$prop * .f)^2
-    .dRdf <- 2 * errPar$prop^2 * .f
-    .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
-    .dLLdw <- vapply(.aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
-    nnTorchZeroGrad(.aug$id)
-    nnTorchSetGrad(.aug$id, -.dLLdw)
-    nnTorchStep(.aug$id)
-    sqrt(mean(.resid^2))
-  }
+  .weightStep <- .nnWeightStepper(.aug, .data, .idCol, .obs, .dv, .wPlaceholder)
 
   ## warm-up: a naive-pooled step schedule at zero random effects, from the model
   ## initial parameters, so the first inner fit sees a non-degenerate network.
@@ -266,19 +297,25 @@ nlmixr2Est.nnIter <- function(env, ...) {
                     .nRun, .wChange, .nn$tol))
   }
 
-  ## finalize: the last inner fit is the base-model fit; bake the trained weights
-  ## into the ui as forcedPars so predict()/simulate() reproduce them with no
-  ## torch/loader state, and attach the training trace.  f$ui returns a CLONE, so
-  ## the forced weights must be written into the ui STORED in the fit env.
+  ## ONE final fit at the trained weights WITH the user's tables + covariance
+  ## (skipped during the iteration); this is the returned deliverable.
   .trained <- stats::setNames(nnTorchWeights(.aug$id), .aug$weights)
+  .finalCtl <- .nnRestoreTablesCov(.innerCtl, .origTablesCov)
+  .fit <- .nnFinalFit(.ui, .data, nnTorchWeights(.aug$id), .baseBase, .aug,
+                      .innerEst, .finalCtl, .idCol)
+  ## bake the trained weights into the fit's ui as forcedPars so predict()/
+  ## simulate() reproduce them.  f$ui returns a CLONE, so write the ui STORED in
+  ## the fit env.
   .fitEnv <- .fit$env
   .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
   rxode2::rxForcedPars(.storedUi) <- .trained
   assign("ui", .storedUi, envir = .fitEnv)
-  .fit$nnParHist <- do.call(rbind, .parHist)
-  .fit$nnWeights <- .trained
-  .fit$nnConverged <- .converged
-  .fit$nnRounds <- .nRun
+  ## store the NN metadata in the fit env (NOT via `$<-`, which would try to add a
+  ## data column); `fit$nnParHist` etc. fall back to the env.
+  assign("nnParHist", do.call(rbind, .parHist), envir = .fitEnv)
+  assign("nnWeights", .trained, envir = .fitEnv)
+  assign("nnConverged", .converged, envir = .fitEnv)
+  assign("nnRounds", .nRun, envir = .fitEnv)
   .fit
 }
 attr(nlmixr2Est.nnIter, "covariate") <- NULL
