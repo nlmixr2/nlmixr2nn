@@ -45,7 +45,12 @@
   for (.e in .etas) {
     .keep <- gsub(paste0("\\b", gsub("\\.", "\\\\.", .e), "\\b"), .covMap[[.e]], .keep)
   }
-  .param <- paste0("param(", paste(c(.m$weights, unname(.covMap)), collapse = ", "), ")")
+  ## the model's non-weight covariates are NN inputs too (e.g. WT in
+  ## `nn(WT, eta.nn)`) -- declare them so the augmented solve reads them from the
+  ## data, alongside the weight block and the latent-eta covariates.
+  .realCovs <- setdiff(ui$allCovs, .m$weights)
+  .param <- paste0("param(",
+                   paste(c(.m$weights, .realCovs, unname(.covMap)), collapse = ", "), ")")
   .augBase <- paste(c(.param, .keep), collapse = "\n")
   .augText <- nnAugmentModel(.augBase, H = .m$H)
   .nW <- .m$H * .m$K + 2L * .m$H + 1L
@@ -53,7 +58,7 @@
        mAug = rxode2::rxode2(.augText),
        base = .nnWeightBase(rxode2::rxode2(.augBase), .m$id, .m$K, .m$H),
        id = .m$id, K = .m$K, H = .m$H, act = .m$act,
-       weights = .m$weights, nW = .nW, covMap = .covMap,
+       weights = .m$weights, nW = .nW, covMap = .covMap, realCovs = .realCovs,
        endpoint = .end$state, sdName = .end$sd,
        swCols = sprintf("rx_sw_%s_%d_", .end$state, seq_len(.nW) - 1L))
 }
@@ -98,12 +103,17 @@ nlmixr2Est.nn <- function(env, ...) {
   .dv <- .data[[if ("DV" %in% names(.data)) "DV" else "dv"]]
   .wPlaceholder <- stats::setNames(rep(0, .aug$nW), .aug$weights)
 
-  ## one torch weight step from the per-subject EBEs + current residual SD
-  .weightStep <- function(ebes, sigma) {
+  ## one torch weight step from the per-subject EBEs + current residual SD.
+  ## `thetas` are the fitted population parameters -- supplied so NN inputs that
+  ## are computed parameters (e.g. `nn(cl, eta.nn)` with `cl <- exp(tcl)`) take
+  ## their fitted values in the augmented solve; NN input covariates (e.g. WT)
+  ## ride in the data.
+  .weightStep <- function(ebes, sigma, thetas) {
     .ad <- .data
     for (.e in names(.aug$covMap)) .ad[[.aug$covMap[[.e]]]] <- ebes[as.character(.ad[[.idCol]])]
     nnSetWeights(.aug$id, nnTorchWeights(.aug$id))
-    .s <- rxode2::rxSolve(.aug$mAug, .ad, params = .wPlaceholder, returnType = "data.frame")
+    .p <- c(thetas, .wPlaceholder)
+    .s <- rxode2::rxSolve(.aug$mAug, .ad, params = .p, returnType = "data.frame")
     .ik <- match(paste(.data[[.idCol]][.obs], .data$time[.obs]),
                  paste(.s$id, .s$time))
     .resid <- .dv[.obs] - .s[[.aug$endpoint]][.ik]
@@ -124,7 +134,8 @@ nlmixr2Est.nn <- function(env, ...) {
     .latent <- names(.aug$covMap)[1L]              # single latent eta name (MVP)
     .ebes <- stats::setNames(.fit$eta[[.latent]], as.character(.fit$eta[["ID"]]))
     .sigma <- .fit$theta[[.aug$sdName]]
-    for (.ws in seq_len(.nn$wSteps)) .rmse <- .weightStep(.ebes, .sigma)
+    .thetas <- .fit$theta
+    for (.ws in seq_len(.nn$wSteps)) .rmse <- .weightStep(.ebes, .sigma, .thetas)
     .parHist[[.round]] <- data.frame(round = .round, objf = .fit$objf,
                                      add.sd = .sigma, rmse = .rmse)
   }

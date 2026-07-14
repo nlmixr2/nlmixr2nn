@@ -14,15 +14,18 @@
 
 ## Parse a single `<out> = nn<K>(<id>, <in1>, <in2>, ...)` line from model text.
 .nnParseCall <- function(modelText) {
-  .lines <- unlist(strsplit(modelText, "\n", fixed = TRUE))
-  .re <- "^\\s*([A-Za-z._][A-Za-z0-9._]*)\\s*(?:=|<-)\\s*(nn([0-9]+))\\s*\\(([^)]*)\\)\\s*$"
-  .m <- regmatches(.lines, regexec(.re, .lines, perl = TRUE))
-  .hit <- Filter(function(x) length(x) == 5L, .m)
-  if (length(.hit) == 0L) stop("no `out = nn<K>(id, ...)` call found in model", call. = FALSE)
-  if (length(.hit) > 1L) stop("multiple nn() calls not yet supported", call. = FALSE)
-  .x <- .hit[[1L]]
-  .args <- trimws(unlist(strsplit(.x[[5L]], ",", fixed = TRUE)))
-  list(out = .x[[2L]], fn = .x[[3L]], K = as.integer(.x[[4L]]),
+  ## find the nn<K>(id, in1, ...) call ANYWHERE (it may be nested inside another
+  ## expression, e.g. `cl <- exp(nn2(0, WT, eta.nn))`), not only as a bare
+  ## assignment.  Inputs are simple names, so the call args contain no inner
+  ## parens.  nnWg<K> is not matched (a letter follows `nn`).
+  .txt <- paste(modelText, collapse = "\n")
+  .re <- "\\bnn([0-9]+)\\s*\\(([^()]*)\\)"
+  .hits <- regmatches(.txt, gregexpr(.re, .txt, perl = TRUE))[[1]]
+  if (length(.hits) == 0L) stop("no `nn<K>(id, ...)` call found in model", call. = FALSE)
+  if (length(unique(.hits)) > 1L) stop("multiple nn() calls not yet supported", call. = FALSE)
+  .mm <- regmatches(.hits[[1L]], regexec(.re, .hits[[1L]], perl = TRUE))[[1]]
+  .args <- trimws(unlist(strsplit(.mm[[3L]], ",", fixed = TRUE)))
+  list(fn = paste0("nn", .mm[[2L]]), K = as.integer(.mm[[2L]]),
        id = as.integer(.args[[1L]]), inputs = .args[-1L])
 }
 

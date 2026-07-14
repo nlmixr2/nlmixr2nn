@@ -60,3 +60,52 @@ test_that("est='nn' recovers the population NN shape + IIV and is self-contained
   expect_equal(length(f$nnWeights), nW)
   expect_equal(length(rxode2::rxForcedPars(f$ui)), nW)
 })
+
+test_that("est='nn' injects NN input covariates into training (covariate-NN)", {
+  skip_on_cran()
+  skip_if_not_installed("rxode2")
+  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
+  if (!ok) skip("libtorch backend not available")
+  .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
+  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  rxode2::setRxThreads(1L)
+
+  ## elimination rate depends on a covariate WT (exp(0.5*WT)) with IIV; the NN
+  ## input is the covariate WT (nested nn call) + the latent eta.
+  set.seed(1)
+  ns <- 8L; WTv <- runif(ns, -1, 1); etaTrue <- rnorm(ns, 0, sqrt(0.1))
+  tm <- rxode2::rxode2("d/dt(central) = -exp(0.5*WT + eV)*central")
+  data <- do.call(rbind, lapply(1:ns, function(id) {
+    s <- rxode2::rxSolve(tm, data.frame(id = id, time = c(0, 0.5, 1, 2, 4, 6, 8),
+           evid = c(1, rep(0, 6)), cmt = 1, amt = c(10, rep(0, 6)), WT = WTv[id]),
+           params = c(eV = etaTrue[id]), returnType = "data.frame")
+    s <- s[s$time > 0, ]
+    data.frame(id = id, time = c(0, s$time), evid = c(1, rep(0, nrow(s))), cmt = 1,
+               amt = c(10, rep(0, nrow(s))), WT = WTv[id],
+               dv = c(NA, s$central + rnorm(nrow(s), 0, 0.1)))
+  }))
+
+  nnClearMeta()
+  modC <- function() {
+    ini({ add.sd <- 0.3; eta.nn ~ 0.1 })
+    model({ cl <- exp(nn(WT, eta.nn))           # NN input is the covariate WT
+            d/dt(central) <- -cl * central
+            central ~ add(add.sd) })
+  }
+  ctl <- nnControl(nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
+                                            maxInnerIterations = 25L, calcTables = FALSE),
+                   rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L)
+  f <- suppressWarnings(suppressMessages(
+    nlmixr2est::nlmixr2(modC, nnCovData(data), est = "nn", control = ctl)))
+
+  expect_true(is.finite(f$objf))
+  ebes <- setNames(f$eta$eta.nn, f$eta$ID)
+  expect_gt(abs(cor(ebes[order(as.integer(names(ebes)))], etaTrue)), 0.6)
+
+  ## the trained network learned the WT effect: cl increases with WT, matching
+  ## the true exp(0.5*WT) trend (the covariate genuinely reached the NN)
+  nnSetWeights(0L, f$nnWeights)
+  clhat <- vapply(c(-0.8, 0, 0.8), function(w) exp(nn2(0L, w, 0)), numeric(1))
+  expect_true(clhat[1] < clhat[2] && clhat[2] < clhat[3])
+  expect_lt(abs(clhat[3] / clhat[1] - exp(0.5 * 1.6)), 0.6)
+})
