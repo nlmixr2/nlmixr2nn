@@ -39,6 +39,11 @@
     ## bind to a local before rxFromSE (NSE gotcha: inline `symengine::D(...)` is
     ## otherwise mis-parsed as a model function call)
     .dd <- symengine::D(symengine::subs(.rhs, .nnExpr, .G), .G)
+    ## substitute the placeholder back to the actual nn() call: when the nn output
+    ## passes through a nonlinear transform, dR/dg depends on g, so the derivative
+    ## still contains rx__nnG__ -- replace it with the real call so the emitted
+    ## rx_drdg_ expression is self-contained (rx__nnG__ is not a model variable).
+    .dd <- symengine::subs(.dd, .G, .nnExpr)
     rxode2::rxFromSE(.dd)
   }, character(1))
 }
