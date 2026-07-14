@@ -88,10 +88,14 @@ static int nnIndividualWeights(int id, const double *eta, int neta, double *out)
   return nW;
 }
 
-void nnInnerWeight(int cid, const double *eta, int neta) {
-  rx_solve *rx = nnGetRx();
-  if (rx == NULL || eta == NULL) return;
-  double *pp = rx->subjects[cid].par_ptr;
+void nnInnerWeight(int cid, const double *eta, int neta, void *ind) {
+  (void) cid; /* ind is already subject cid's rx_solving_options_ind */
+  if (ind == NULL || eta == NULL) return;
+  /* nlmixr2est passes the subject's ind directly -- do NOT use nnGetRx(): the
+     FOCEI inner FD path (shi21EtaF) does not set rxode2's global getRxSolve_(),
+     so nnGetRx() would be NULL there and this hook would segfault. */
+  double *pp = ((rx_solving_options_ind *) ind)->par_ptr;
+  if (pp == NULL) return;
   for (int id = 0; id < NN_MAX; id++) {
     if (!nnReg[id].set || !nnReg[id].individual) continue;
     int base = nnReg[id].base, nW = nnReg[id].nW;

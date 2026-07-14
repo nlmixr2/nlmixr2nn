@@ -39,7 +39,7 @@ SEXP _nlmixr2nn_removeContrib(void) {
 /* register/remove the inner-block per-subject weight injection (nnInnerWeight in
    nnEval.c) with nlmixr2est via the contribution pointer table (element 5).  A
    no-op when built against an older nlmixr2est (pointer stays NULL). */
-extern void nnInnerWeight(int cid, const double *eta, int neta);
+extern void nnInnerWeight(int cid, const double *eta, int neta, void *ind);
 SEXP _nlmixr2nn_registerInnerWt(void) {
   if (nlmixrSetInnerWeightFnP != NULL) nlmixrSetInnerWeightFnP(nnInnerWeight);
   return R_NilValue;
