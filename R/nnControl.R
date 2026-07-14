@@ -35,12 +35,26 @@
 #' @param lr torch optimizer learning rate.
 #' @param warmSteps optional naive-pooled (eta=0) torch warm-up steps before the
 #'   loop (default 0).
-#' @param warmStart optional population weight pre-fit before the loop: `"none"`
-#'   (default) or `"pop"` -- a gradient-based (quasi-Newton `nlminb`) fit of the
-#'   weights at eta=0 with an analytic sensitivity gradient, seeding the joint fit
-#'   with a robust population weight vector (bridges the fixed-effects and
-#'   DeepPumas approaches).  `warmPopIters` caps its iterations.
-#' @param warmPopIters iteration cap for `warmStart = "pop"` (default 30).
+#' @param warmStart population weight pre-fit before the loop -- the "nlm bridge".
+#'   Runs a fixed-effects (eta = 0) fit of the weights with the named nlm-family
+#'   optimizer, seeding the joint fit with a robust population weight vector
+#'   (bridging the fixed-effects and DeepPumas approaches).  Since nlm is simply an
+#'   optimizer, the choice is `"lbfgsb3c"` (default), `"nlminb"`, `"nlm"`, `"optim"`
+#'   (BFGS), `"n1qn1"` (gradient-based, using the analytic sensitivity gradient) or
+#'   `"bobyqa"`, `"newuoa"`, `"uobyqa"` (derivative-free); `"none"` disables it.
+#'   `"pop"` is an alias for `"nlminb"`.  The pre-fit optimizes only the weights and
+#'   never uses a random effect, so any of these population-only optimizers applies.
+#'   It is SKIPPED automatically when the model already carries trained weights
+#'   (e.g. a fit passed back in) -- those are the warm start.  `warmPopIters` caps
+#'   its iterations.
+#' @param warmPopIters iteration cap for the `warmStart` pre-fit (default 3).  Kept
+#'   deliberately light: a few iterations escape a bad random initialization while
+#'   leaving the per-subject variation for the random effect.  A longer population
+#'   pre-fit can over-fit -- the network then absorbs IIV that should go to the
+#'   random effect (weakening eta recovery) and can push an SAEM inner fit into a
+#'   poorly conditioned region -- so raise it only when you want a stronger
+#'   fixed-effects starting point (e.g. a population/UDE model with no random
+#'   effect).
 #' @param optimizer torch optimizer, `"adam"` or `"sgd"`.
 #' @param seed optional integer seed for torch weight initialization (ignored when
 #'   the model already carries trained weights, which are used as the start).
@@ -50,11 +64,14 @@
 nnControl <- function(mode = c("joint", "iter"),
                       rounds = 200L, tol = 1e-3, wSteps = 2L, outerPerRound = 1L,
                       lr = 0.03, warmSteps = 0L,
-                      warmStart = c("none", "pop"), warmPopIters = 30L,
+                      warmStart = c("lbfgsb3c", "nlminb", "nlm", "optim", "n1qn1",
+                                    "bobyqa", "newuoa", "uobyqa", "none", "pop"),
+                      warmPopIters = 3L,
                       optimizer = c("adam", "sgd"), seed = NULL) {
   mode <- match.arg(mode)
   optimizer <- match.arg(optimizer)
   warmStart <- match.arg(warmStart)
+  if (warmStart == "pop") warmStart <- "nlminb"    # back-compat alias
   checkmate::assertIntegerish(rounds, lower = 1L, len = 1L, .var.name = "rounds")
   checkmate::assertNumeric(tol, lower = 0, len = 1L, .var.name = "tol")
   checkmate::assertIntegerish(wSteps, lower = 1L, len = 1L, .var.name = "wSteps")

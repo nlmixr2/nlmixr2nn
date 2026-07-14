@@ -194,14 +194,22 @@ plumbing is needed). If the fitted model already carries trained weights (as
 `rxForcedPars`, e.g. a previous `nlmixr2nn` fit), those are used as the warm-start
 rather than a fresh random initialization.
 
-**Warm starts.** Random weight initializations can be fragile. Two options seed the
-loop with a better starting point: `nnControl(warmSteps = n)` takes `n` naive-pooled
-torch steps at `eta = 0`, and `nnControl(warmStart = "pop")` runs a gradient-based
-population pre-fit -- a quasi-Newton (`nlminb`) fit of the weights at `eta = 0` with
-an analytic sensitivity gradient (the "nlm bridge": the weights sit in the vector a
-fixed-effects optimizer moves, giving a robust population weight vector before the
-random effects enter). A model that already carries trained weights takes those as
-the warm start and skips both.
+**Warm starts.** Random weight initializations can be fragile, so a population
+weight pre-fit -- the "nlm bridge" -- runs **by default** before the loop (unless
+the model already carries trained weights, e.g. a fit passed back in, in which case
+those are the warm start and the pre-fit is skipped). It fits the weights at `eta =
+0` with a fixed-effects optimizer: the weights sit in the vector the optimizer
+moves, giving a robust population weight vector before the random effects enter. As
+*nlm is simply an optimizer*, `nnControl(warmStart = ...)` picks any nlm-family
+optimizer -- `"lbfgsb3c"` (default), `"nlminb"`, `"nlm"`, `"optim"`, `"n1qn1"`
+(gradient-based, using the analytic sensitivity gradient) or `"bobyqa"`,
+`"newuoa"`, `"uobyqa"` (derivative-free) -- and none uses a random effect. It is
+kept deliberately light (`warmPopIters = 3`): a few iterations escape a bad
+initialization while leaving the per-subject variation for the random effect, since
+a long pre-fit lets the population network absorb IIV that should go to the eta.
+Set `warmStart = "none"` to disable it, or raise `warmPopIters` for a stronger
+fixed-effects start (e.g. a population/UDE model with no random effect).
+`nnControl(warmSteps = n)` additionally takes `n` naive-pooled torch steps.
 
 ## Inputs and activations
 

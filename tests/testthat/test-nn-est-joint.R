@@ -191,16 +191,22 @@ test_that("nlm-bridge population warm-start seeds the joint fit with a better st
         nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 6L,
                                  maxInnerIterations = 25L, calcTables = FALSE),
         nn = nnControl(mode = "iter", rounds = 5L, wSteps = 6L, lr = 0.03, seed = 5L,
-                       warmStart = ws))))
+                       warmStart = ws, warmPopIters = 40L))))
     ebes <- setNames(f$eta$eta.nn, f$eta$ID)
-    list(r1 = f$nnParHist$rmse[1L],
+    list(r1 = f$nnParHist$rmse[1L], objf = f$objf,
          corr = abs(cor(ebes[order(as.integer(names(ebes)))], etaTrue)))
   }
-  none <- runWs("none"); pop <- runWs("pop")
-
-  ## the population (nlm-bridge) pre-fit lands the network far closer to the data
-  ## before the mixed-model loop starts (much lower round-1 rmse), and still
-  ## recovers the IIV.
-  expect_lt(pop$r1, none$r1)
-  expect_gt(pop$corr, 0.7)
+  none <- runWs("none")
+  ## nlm is simply an optimizer: the population (nlm-bridge) pre-fit works with any
+  ## nlm-family optimizer -- a gradient-based one ("nlm") and a derivative-free one
+  ## ("bobyqa") both land the network far closer to the data before the mixed-model
+  ## loop (much lower round-1 rmse), with no random effect used, and still recover
+  ## meaningful IIV (a strong population pre-fit can absorb some variation, so the
+  ## eta correlation is looser than the default-path guarantee, but non-trivial).
+  for (ws in c("nlm", "bobyqa")) {
+    pop <- runWs(ws)
+    expect_lt(pop$r1, none$r1)
+    expect_true(is.finite(pop$objf))
+    expect_gt(pop$corr, 0.4)
+  }
 })

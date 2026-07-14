@@ -197,15 +197,46 @@
   }
 }
 
-## Population (eta=0) weight pre-fit via nlminb over the weight vector with an
-## ANALYTIC gradient (d(-2LL)/dw from the augmented rx_predsw sensitivities).  This
-## is the "nlm bridge": a robust gradient-based fixed-effects fit of the network
-## weights, used as the warm start for the mixed-model joint fit.  Weights sit in
-## the optimized vector (as nlm would place them), the eta is fixed at its warm-
-## start location 0, and the population error params come from the model ini.
-## Returns the fitted weight vector (aug$weights order).
+## Dispatch the population weight fit to any nlm-family optimizer -- nlm is simply
+## an optimizer.  The gradient-based nlminb/nlm/optim(BFGS)/lbfgsb3c/n1qn1 use the
+## analytic sensitivity gradient; the derivative-free minqa family bobyqa/newuoa/
+## uobyqa use only the objective (rhobeg/rhoend set so an at-optimum start is safe).
+## None uses a random effect.  Returns the fitted weight vector (w0 on failure).
+.nnPopOptimize <- function(w0, objf, grf, est, iters) {
+  ## the non-stats optimizers live in Suggests packages; if one is unavailable
+  ## (e.g. the default lbfgsb3c is not installed) fall back to nlminb (always in
+  ## stats) rather than skipping the warm start.
+  .pkg <- c(lbfgsb3c = "lbfgsb3c", n1qn1 = "n1qn1",
+            bobyqa = "minqa", newuoa = "minqa", uobyqa = "minqa")[est]
+  if (!is.na(.pkg) && !requireNamespace(.pkg, quietly = TRUE)) est <- "nlminb"
+  .rho <- list(rhobeg = 0.2, rhoend = 1e-4, maxfun = 50L * iters)
+  .par <- tryCatch(switch(est,
+    nlminb   = stats::nlminb(w0, objf, grf,
+                             control = list(iter.max = iters, eval.max = 3L * iters))$par,
+    nlm      = stats::nlm(function(w) { .r <- objf(w); attr(.r, "gradient") <- grf(w); .r },
+                          w0, iterlim = iters)$estimate,
+    optim    = stats::optim(w0, objf, grf, method = "BFGS",
+                            control = list(maxit = iters))$par,
+    lbfgsb3c = lbfgsb3c::lbfgsb3c(w0, objf, grf, control = list(maxit = iters))$par,
+    n1qn1    = n1qn1::n1qn1(objf, grf, w0, max_iterations = iters)$par,
+    bobyqa   = minqa::bobyqa(w0, objf, control = .rho)$par,
+    newuoa   = minqa::newuoa(w0, objf, control = .rho)$par,
+    uobyqa   = minqa::uobyqa(w0, objf, control = .rho)$par,
+    stop("nlmixr2nn: unknown warmStart optimizer '", est, "'", call. = FALSE)),
+    error = function(e) NULL)
+  if (is.null(.par) || length(.par) != length(w0) || anyNA(.par)) w0 else unname(.par)
+}
+
+## Population (eta=0) weight pre-fit over the weight vector -- the "nlm bridge": a
+## robust fixed-effects fit of the network weights used as the warm start for the
+## mixed-model joint fit.  Weights sit in the optimized vector (as nlm would place
+## them), the eta is fixed at its warm-start location 0 (so any population-only
+## optimizer applies, no random effect), and the population error params come from
+## the model ini.  `est` names the nlm-family optimizer.  The objective is the
+## pooled -2 log-likelihood with the analytic d(-2LL)/dw from the augmented
+## rx_predsw sensitivities.  Returns the fitted weight vector (aug$weights order).
 .nnPopWarmStart <- function(aug, data, idCol, obs, dv, wPlaceholder, thetas, errPar,
-                            w0, iters) {
+                            w0, est, iters) {
   .ad <- data
   for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- 0    # population: eta = 0
   if (errPar$add == 0 && errPar$prop == 0) errPar$add <- 1      # avoid R(f)=0
@@ -227,7 +258,7 @@
          grad = -2 * vapply(aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]),
                             numeric(1), USE.NAMES = FALSE))
   }
-  ## cache the last evaluation so nlminb's paired objective/gradient calls solve once
+  ## cache the last evaluation so paired objective/gradient calls solve once
   .cache <- new.env(parent = emptyenv())
   .get <- function(w) {
     if (is.null(.cache$w) || !isTRUE(all.equal(w, .cache$w))) {
@@ -235,12 +266,7 @@
     }
     .cache$v
   }
-  .fit <- tryCatch(
-    stats::nlminb(w0, objective = function(w) .get(w)$obj,
-                  gradient = function(w) .get(w)$grad,
-                  control = list(iter.max = iters, eval.max = 3L * iters)),
-    error = function(e) NULL)
-  if (is.null(.fit)) w0 else .fit$par
+  .nnPopOptimize(w0, function(w) .get(w)$obj, function(w) .get(w)$grad, est, iters)
 }
 
 ## Warm-start weights from a ui that already carries trained weights (as
@@ -335,11 +361,12 @@
   ## the nlm bridge: a gradient-based population (eta=0) weight pre-fit seeding the
   ## joint fit with a robust weight vector (unless the model already carries
   ## trained weights, in which case those are the warm start).
-  if (identical(sched$warmStart, "pop") && is.null(.existing)) {
+  if (!identical(sched$warmStart, "none") && is.null(.existing)) {
     .wPop <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder,
-                             .th0, .errPar0, nnTorchWeights(.aug$id), sched$warmPopIters)
+                             .th0, .errPar0, nnTorchWeights(.aug$id),
+                             sched$warmStart, sched$warmPopIters)
     nnTorchSetWeights(.aug$id, .wPop)
-    message("nn: population (nlm-bridge) warm start applied")
+    message(sprintf("nn: population (nlm-bridge, %s) warm start applied", sched$warmStart))
   }
 
   ## optional naive-pooled (eta=0) torch warm-up from the model initial parameters

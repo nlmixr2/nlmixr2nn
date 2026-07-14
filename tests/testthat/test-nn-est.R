@@ -101,11 +101,15 @@ test_that("iterative nn training injects NN input covariates (covariate-NN)", {
             d/dt(central) <- -cl * central
             central ~ add(add.sd) })
   }
+  ## warmStart="none": this test verifies the cold-start learning of a specific
+  ## covariate relationship, so it pins off the default population pre-fit (which
+  ## would otherwise pre-shape the WT effect).
   f <- suppressWarnings(suppressMessages(
     nlmixr2est::nlmixr2(modC, nnCovData(data), "focei",
       nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
                                maxInnerIterations = 25L, calcTables = FALSE),
-      nn = nnControl(mode = "iter", rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L))))
+      nn = nnControl(mode = "iter", rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L,
+                     warmStart = "none"))))
 
   expect_true(is.finite(f$objf))
   ebes <- setNames(f$eta$eta.nn, f$eta$ID)
@@ -234,10 +238,13 @@ test_that("iterative nn training works with a SAEM inner estimator", {
   ## the inner estimator is just the standard est ("saem"); the trained weights
   ## reach SAEM's estimation kernel via the data covariate columns (SAEM does not
   ## call the rxode2 par-loader), and covMethod="" skips the per-round covariance.
+  ## warmStart="none": the population pre-fit is FOCEi-oriented and can push the
+  ## block-coordinate SAEM inner into a poorly conditioned region, so pin it off.
   f <- suppressWarnings(suppressMessages(
     nlmixr2est::nlmixr2(modF, nnCovData(data), "saem",
       nlmixr2est::saemControl(print = 0L, nBurn = 150L, nEm = 150L, covMethod = ""),
-      nn = nnControl(mode = "iter", rounds = 6L, wSteps = 8L, lr = 0.03, seed = 5L))))
+      nn = nnControl(mode = "iter", rounds = 6L, wSteps = 8L, lr = 0.03, seed = 5L,
+                     warmStart = "none"))))
 
   expect_true(is.finite(f$objf))
   ebes <- setNames(f$eta$eta.nn, f$eta$ID)
