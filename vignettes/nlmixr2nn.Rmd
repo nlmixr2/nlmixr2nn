@@ -156,6 +156,11 @@ are baked into the model as `rxForcedPars()` -- so `predict(fit)` and simulation
 reproduce them with no external torch/loader state (the fit is self-contained and
 portable, like a `nonmem2rx` model).
 
+The inner estimator is whatever you wrap: `nnControl(saemControl())` and
+`nnControl(impmapControl())` run the same alternating loop with SAEM or
+importance-sampling inner fits (the network weights reach the inner fit through
+the data, so no estimator-specific plumbing is needed).
+
 ## Inputs and activations
 
 The compiled family supports input dimensions `K = 1..4` -- pass several states
