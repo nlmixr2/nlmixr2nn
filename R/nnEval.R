@@ -51,24 +51,6 @@ nnSetMeta <- function(id, base, K, H, act = "relu") {
                   as.integer(K), as.integer(H), .nnActCode[[act]]))
 }
 
-#' Mark a network as individual (pop = FALSE): per-subject weights via weight etas
-#'
-#' The network's weights become individual, `W_i = f(lW, etaW)`, where `lW` are
-#' the population (torch) weights and `etaW` are `nW` random effects starting at
-#' `etaBase` in the model's eta vector.  FOCEI's inner weight-injection hook
-#' applies this each time a subject's etas are set.
-#'
-#' @param id network id.
-#' @param etaBase 0-based index of the first weight-eta in the model's eta vector.
-#' @param etaModel "prop" (`W = lW * exp(etaW)`) or "add" (`W = lW + etaW`).
-#' @return invisibly TRUE.
-#' @export
-nnSetIndividual <- function(id, etaBase, etaModel = c("prop", "add")) {
-  etaModel <- match.arg(etaModel)
-  invisible(.Call(`_nlmixr2nn_nnSetIndividual`, as.integer(id), as.integer(etaBase),
-                  as.integer(etaModel == "add")))
-}
-
 #' Clear all registered network layouts
 #' @return invisibly TRUE.
 #' @export

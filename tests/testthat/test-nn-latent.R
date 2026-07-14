@@ -1,10 +1,10 @@
 ## DeepPumas-style latent-input random effect: instead of putting inter-individual
-## variability on the network WEIGHTS (nni, which is over-parameterized and needs a
-## finite-difference eta sensitivity), feed a small per-subject latent eta as an
-## INPUT to a POPULATION network: g <- nn(state, eta.latent).  The eta is then a
-## normal (visible) nlmixr2 eta, so its inner FOCEi sensitivity d(g)/d(eta) is the
-## network's analytic input derivative (nn<K>_d<j>) -- exact, no finite differences,
-## no etaFD directive -- and it is strongly identifiable.
+## variability on the network WEIGHTS (over-parameterized and weakly identifiable),
+## feed a small per-subject latent eta as an INPUT to a POPULATION network:
+## g <- nn(state, eta.latent).  The eta is then a normal (visible) nlmixr2 eta, so
+## its inner FOCEi sensitivity d(g)/d(eta) is the network's analytic input
+## derivative (nn<K>_d<j>) -- exact, no finite differences -- and it is strongly
+## identifiable.
 
 test_that("a latent-input NN random effect fits with analytic (non-FD) sensitivity", {
   skip_on_cran()
@@ -45,7 +45,7 @@ test_that("a latent-input NN random effect fits with analytic (non-FD) sensitivi
 
   expect_true(is.finite(f$objf))
   ## the latent eta is genuinely identifiable: its EBEs are non-degenerate (they move
-  ## per subject) -- the exact opposite of per-weight nni, whose weight-eta EBEs stick
+  ## per subject) -- the exact opposite of per-weight IIV, whose weight-eta EBEs stick
   ## near 0 with no gradient.  This EBE spread is the robust identifiability signal;
   ## the estimated Omega is a sane non-trivial variance.
   expect_gt(diff(range(f$eta$eta.nn)), 1.0)
