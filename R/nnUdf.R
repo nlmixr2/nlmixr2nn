@@ -29,6 +29,14 @@ rxUdfUi.nn <- function(fun) {
 #' is replaced by a compiled `nn<K>()` call and its weights are added to the
 #' model as randomly-initialized population parameters.
 #'
+#' Inter-individual variability (a "deepNLME"/DeepPumas-style latent random
+#' effect) is best added by passing a per-subject latent eta as an INPUT to the
+#' population network, e.g. `g <- nn(central, eta.latent)` with
+#' `eta.latent ~ omega` in the `ini` block.  Because the eta is then an ordinary
+#' (visible) nlmixr2 random effect, its inner FOCEi sensitivity `d(g)/d(eta)` is
+#' the network's analytic input derivative -- exact, no finite differences -- and
+#' it is far more identifiable than a random effect on every weight (see [nni()]).
+#'
 #' @param ... one or more state/covariate inputs to the network (given
 #'   positionally, e.g. `nn(central, t)`).
 #' @param n_hidden hidden-layer width (default 5).
