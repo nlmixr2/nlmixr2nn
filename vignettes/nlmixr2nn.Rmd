@@ -194,6 +194,15 @@ plumbing is needed). If the fitted model already carries trained weights (as
 `rxForcedPars`, e.g. a previous `nlmixr2nn` fit), those are used as the warm-start
 rather than a fresh random initialization.
 
+**Warm starts.** Random weight initializations can be fragile. Two options seed the
+loop with a better starting point: `nnControl(warmSteps = n)` takes `n` naive-pooled
+torch steps at `eta = 0`, and `nnControl(warmStart = "pop")` runs a gradient-based
+population pre-fit -- a quasi-Newton (`nlminb`) fit of the weights at `eta = 0` with
+an analytic sensitivity gradient (the "nlm bridge": the weights sit in the vector a
+fixed-effects optimizer moves, giving a robust population weight vector before the
+random effects enter). A model that already carries trained weights takes those as
+the warm start and skips both.
+
 ## Inputs and activations
 
 The compiled family supports input dimensions `K = 1..4` -- pass several states

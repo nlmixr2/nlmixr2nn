@@ -33,7 +33,14 @@
 #' @param outerPerRound (`"joint"` only) inner outer-iterations per round -- the
 #'   partial step that makes it joint rather than a full re-fit.
 #' @param lr torch optimizer learning rate.
-#' @param warmSteps optional naive-pooled warm-up steps before the loop (default 0).
+#' @param warmSteps optional naive-pooled (eta=0) torch warm-up steps before the
+#'   loop (default 0).
+#' @param warmStart optional population weight pre-fit before the loop: `"none"`
+#'   (default) or `"pop"` -- a gradient-based (quasi-Newton `nlminb`) fit of the
+#'   weights at eta=0 with an analytic sensitivity gradient, seeding the joint fit
+#'   with a robust population weight vector (bridges the fixed-effects and
+#'   DeepPumas approaches).  `warmPopIters` caps its iterations.
+#' @param warmPopIters iteration cap for `warmStart = "pop"` (default 30).
 #' @param optimizer torch optimizer, `"adam"` or `"sgd"`.
 #' @param seed optional integer seed for torch weight initialization (ignored when
 #'   the model already carries trained weights, which are used as the start).
@@ -42,19 +49,23 @@
 #' @author Matthew L. Fidler
 nnControl <- function(mode = c("joint", "iter"),
                       rounds = 200L, tol = 1e-3, wSteps = 2L, outerPerRound = 1L,
-                      lr = 0.03, warmSteps = 0L, optimizer = c("adam", "sgd"),
-                      seed = NULL) {
+                      lr = 0.03, warmSteps = 0L,
+                      warmStart = c("none", "pop"), warmPopIters = 30L,
+                      optimizer = c("adam", "sgd"), seed = NULL) {
   mode <- match.arg(mode)
   optimizer <- match.arg(optimizer)
+  warmStart <- match.arg(warmStart)
   checkmate::assertIntegerish(rounds, lower = 1L, len = 1L, .var.name = "rounds")
   checkmate::assertNumeric(tol, lower = 0, len = 1L, .var.name = "tol")
   checkmate::assertIntegerish(wSteps, lower = 1L, len = 1L, .var.name = "wSteps")
   checkmate::assertIntegerish(outerPerRound, lower = 1L, len = 1L, .var.name = "outerPerRound")
   checkmate::assertNumeric(lr, lower = 0, len = 1L, .var.name = "lr")
   checkmate::assertIntegerish(warmSteps, lower = 0L, len = 1L, .var.name = "warmSteps")
+  checkmate::assertIntegerish(warmPopIters, lower = 1L, len = 1L, .var.name = "warmPopIters")
   structure(list(mode = mode, rounds = as.integer(rounds), tol = as.numeric(tol),
                  wSteps = as.integer(wSteps), outerPerRound = as.integer(outerPerRound),
                  lr = as.numeric(lr), warmSteps = as.integer(warmSteps),
+                 warmStart = warmStart, warmPopIters = as.integer(warmPopIters),
                  optimizer = optimizer,
                  seed = if (is.null(seed)) NULL else as.integer(seed)),
             class = "nnControl")

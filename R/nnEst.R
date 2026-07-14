@@ -197,6 +197,52 @@
   }
 }
 
+## Population (eta=0) weight pre-fit via nlminb over the weight vector with an
+## ANALYTIC gradient (d(-2LL)/dw from the augmented rx_predsw sensitivities).  This
+## is the "nlm bridge": a robust gradient-based fixed-effects fit of the network
+## weights, used as the warm start for the mixed-model joint fit.  Weights sit in
+## the optimized vector (as nlm would place them), the eta is fixed at its warm-
+## start location 0, and the population error params come from the model ini.
+## Returns the fitted weight vector (aug$weights order).
+.nnPopWarmStart <- function(aug, data, idCol, obs, dv, wPlaceholder, thetas, errPar,
+                            w0, iters) {
+  .ad <- data
+  for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- 0    # population: eta = 0
+  if (errPar$add == 0 && errPar$prop == 0) errPar$add <- 1      # avoid R(f)=0
+  .key <- paste(data[[idCol]][obs], data$time[obs])
+  .dvObs <- dv[obs]
+  ## objective (-2 log-likelihood) + analytic gradient at weight vector w
+  .eval <- function(w) {
+    nnSetMeta(aug$id, aug$base, aug$K, aug$H, aug$act)          # augmented weight base
+    nnSetWeights(aug$id, w)
+    .s <- rxode2::rxSolve(aug$mAug, .ad, params = c(thetas, wPlaceholder),
+                          returnType = "data.frame")
+    .ik <- match(.key, paste(.s$id, .s$time))
+    .f <- .s[[aug$endpoint]][.ik]
+    .resid <- .dvObs - .f
+    .R <- errPar$add^2 + (errPar$prop * .f)^2
+    .dRdf <- 2 * errPar$prop^2 * .f
+    .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
+    list(obj = sum(log(2 * pi * .R) + .resid^2 / .R),
+         grad = -2 * vapply(aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]),
+                            numeric(1), USE.NAMES = FALSE))
+  }
+  ## cache the last evaluation so nlminb's paired objective/gradient calls solve once
+  .cache <- new.env(parent = emptyenv())
+  .get <- function(w) {
+    if (is.null(.cache$w) || !isTRUE(all.equal(w, .cache$w))) {
+      .cache$w <- w; .cache$v <- .eval(w)
+    }
+    .cache$v
+  }
+  .fit <- tryCatch(
+    stats::nlminb(w0, objective = function(w) .get(w)$obj,
+                  gradient = function(w) .get(w)$grad,
+                  control = list(iter.max = iters, eval.max = 3L * iters)),
+    error = function(e) NULL)
+  if (is.null(.fit)) w0 else .fit$par
+}
+
 ## Warm-start weights from a ui that already carries trained weights (as
 ## rxForcedPars on the weight covariates -- a previous nn fit, or an nlm
 ## population warm-start).  Returns the weight vector (aug$weights order) or NULL.
@@ -277,16 +323,29 @@
                     .innerEst))
   }
 
-  ## optional naive-pooled warm-up at eta=0 from the model initial parameters
+  ## model initial population thetas + error params (shared warm-start inputs)
+  .iniDf <- .ui$iniDf
+  .th0 <- stats::setNames(.iniDf$est[!is.na(.iniDf$ntheta)], .iniDf$name[!is.na(.iniDf$ntheta)])
+  .errPar0 <- list(add = if (is.na(.aug$errAdd)) 0 else unname(.th0[.aug$errAdd]),
+                   prop = if (is.na(.aug$errProp)) 0 else unname(.th0[.aug$errProp]))
+
+  ## the nlm bridge: a gradient-based population (eta=0) weight pre-fit seeding the
+  ## joint fit with a robust weight vector (unless the model already carries
+  ## trained weights, in which case those are the warm start).
+  if (identical(sched$warmStart, "pop") && is.null(.existing)) {
+    .wPop <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder,
+                             .th0, .errPar0, nnTorchWeights(.aug$id), sched$warmPopIters)
+    nnTorchSetWeights(.aug$id, .wPop)
+    message("nn: population (nlm-bridge) warm start applied")
+  }
+
+  ## optional naive-pooled (eta=0) torch warm-up from the model initial parameters
   if (sched$warmSteps > 0L) {
-    .iniDf <- .ui$iniDf
-    .th0 <- stats::setNames(.iniDf$est[!is.na(.iniDf$ntheta)], .iniDf$name[!is.na(.iniDf$ntheta)])
-    .errPar0 <- list(add = if (is.na(.aug$errAdd)) 0 else unname(.th0[.aug$errAdd]),
-                     prop = if (is.na(.aug$errProp)) 0 else unname(.th0[.aug$errProp]))
-    if (.errPar0$add == 0 && .errPar0$prop == 0) .errPar0$add <- 1
+    .errPar0s <- .errPar0
+    if (.errPar0s$add == 0 && .errPar0s$prop == 0) .errPar0s$add <- 1
     .ids <- as.character(unique(.data[[.idCol]]))
     .ebes0 <- stats::setNames(rep(0, length(.ids)), .ids)
-    for (.ws in seq_len(sched$warmSteps)) .weightStep(.ebes0, .errPar0, .th0)
+    for (.ws in seq_len(sched$warmSteps)) .weightStep(.ebes0, .errPar0s, .th0)
   }
 
   .parHist <- vector("list", sched$rounds)

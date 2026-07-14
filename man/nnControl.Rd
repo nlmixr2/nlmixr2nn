@@ -12,6 +12,8 @@ nnControl(
   outerPerRound = 1L,
   lr = 0.03,
   warmSteps = 0L,
+  warmStart = c("none", "pop"),
+  warmPopIters = 30L,
   optimizer = c("adam", "sgd"),
   seed = NULL
 )
@@ -31,7 +33,16 @@ partial step that makes it joint rather than a full re-fit.}
 
 \item{lr}{torch optimizer learning rate.}
 
-\item{warmSteps}{optional naive-pooled warm-up steps before the loop (default 0).}
+\item{warmSteps}{optional naive-pooled (eta=0) torch warm-up steps before the
+loop (default 0).}
+
+\item{warmStart}{optional population weight pre-fit before the loop: `"none"`
+(default) or `"pop"` -- a gradient-based (quasi-Newton `nlminb`) fit of the
+weights at eta=0 with an analytic sensitivity gradient, seeding the joint fit
+with a robust population weight vector (bridges the fixed-effects and
+DeepPumas approaches).  `warmPopIters` caps its iterations.}
+
+\item{warmPopIters}{iteration cap for `warmStart = "pop"` (default 30).}
 
 \item{optimizer}{torch optimizer, `"adam"` or `"sgd"`.}
 
