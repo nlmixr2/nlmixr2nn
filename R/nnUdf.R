@@ -134,13 +134,9 @@ nni <- function(..., n_hidden = 5L,
   ## `before` is a character vector -- one model statement per element (each is
   ## str2lang'd): the weight covariate declaration (as in nn()) + an etaFD()
   ## directive forcing the finite-difference sensitivity of the invisible
-  ## weight-etas.
-  ## KNOWN BLOCKER (rxode2 core): the weight-etas added via the UDF `iniDf` return
-  ## are classified as covariates by the model analysis (env$covariates, mu.R),
-  ## which runs before the iniDf return is applied -- so a fit fails a data-name
-  ## check ("missing elements eta.<w>").  A manually-declared ini({eta.<w>~...})
-  ## model with the same etaFD() works; productizing nni() needs rxode2 to
-  ## recompute env$covariates after a UDF iniDf return (subtracting iniDf etas).
+  ## weight-etas.  The nW weight-etas themselves are appended to the model iniDf
+  ## (below); rxode2 refreshes the eta list from the iniDf on parsing, so they are
+  ## recognized as etas (not covariates).
   .before <- c(paste0("rx_nnw", id, "_ <- ", paste(wnames, collapse = " + ")),
                paste0("etaFD(", paste(etaNames, collapse = ", "), ")"))
 
