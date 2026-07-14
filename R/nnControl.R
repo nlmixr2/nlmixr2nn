@@ -15,6 +15,10 @@
 #' @param inner an inner estimation control object (default
 #'   `nlmixr2est::foceiControl()`).  Its class names the inner estimator.
 #' @param rounds number of alternating rounds (inner fit + weight updates).
+#' @param warmSteps optional torch weight-optimizer steps taken BEFORE the first
+#'   inner fit, as a naive-pooled warm-up at zero random effects (default 0, off).
+#'   A small number can move the randomly initialized network off a poor starting
+#'   point, but is not required.
 #' @param wSteps torch weight-optimizer steps taken per round.
 #' @param lr torch optimizer learning rate.
 #' @param optimizer torch optimizer, `"adam"` or `"sgd"`.
@@ -25,7 +29,7 @@
 #' @export
 #' @author Matthew L. Fidler
 nnControl <- function(inner = nlmixr2est::foceiControl(),
-                      rounds = 15L, wSteps = 8L, lr = 0.03,
+                      rounds = 15L, warmSteps = 0L, wSteps = 8L, lr = 0.03,
                       optimizer = c("adam", "sgd"), seed = NULL,
                       mode = c("alternating")) {
   optimizer <- match.arg(optimizer)
@@ -35,9 +39,11 @@ nnControl <- function(inner = nlmixr2est::foceiControl(),
          call. = FALSE)
   }
   checkmate::assertIntegerish(rounds, lower = 1L, len = 1L, .var.name = "rounds")
+  checkmate::assertIntegerish(warmSteps, lower = 0L, len = 1L, .var.name = "warmSteps")
   checkmate::assertIntegerish(wSteps, lower = 1L, len = 1L, .var.name = "wSteps")
   checkmate::assertNumeric(lr, lower = 0, len = 1L, .var.name = "lr")
-  .nn <- list(rounds = as.integer(rounds), wSteps = as.integer(wSteps),
+  .nn <- list(rounds = as.integer(rounds), warmSteps = as.integer(warmSteps),
+              wSteps = as.integer(wSteps),
               lr = as.numeric(lr), optimizer = optimizer,
               seed = if (is.null(seed)) NULL else as.integer(seed),
               mode = mode)

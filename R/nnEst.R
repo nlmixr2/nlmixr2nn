@@ -137,6 +137,16 @@ nlmixr2Est.nn <- function(env, ...) {
   .nn <- attr(.control, "nnControl")
   .innerEst <- .nnInnerEst(.control)
   .innerCtl <- .nnInnerControl(.control)
+  ## the inner fits are intermediate (only their EBEs + error params are used):
+  ## skip the per-round covariance/FIM and output tables -- both are wasteful, and
+  ## the covariance is often ill-conditioned at the round-1 random weights.
+  if (!is.null(.innerCtl$calcTables)) .innerCtl$calcTables <- FALSE
+  ## covMethod = "" disables covariance for foceiControl and saemControl (needs
+  ## nlmixr2est with the saemControl("") fix).
+  if (!is.null(.innerCtl$covMethod) &&
+        (inherits(.innerCtl, "foceiControl") || inherits(.innerCtl, "saemControl"))) {
+    .innerCtl$covMethod <- ""
+  }
 
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
   if (!ok) stop("est = 'nn' requires the libtorch backend (nnTorchAvailable() is FALSE)",
@@ -145,9 +155,12 @@ nlmixr2Est.nn <- function(env, ...) {
   ## augmented (forward-sensitivity) model + weight-block metadata
   .aug <- .nnAugmentFromUi(.ui)
   .data <- nnCovData(.data)
-  nnUpdate(.ui)                                    # register the base network layout
-  ## torch module for the network weights
-  nnSetMeta(.aug$id, .aug$base, .aug$K, .aug$H, .aug$act)
+  ## the weight block sits at DIFFERENT par_ptr positions in the base model vs the
+  ## augmented model (the base has leading thetas), so the injection base must be
+  ## switched per context: `.baseBase` for the inner fit, `.aug$base` for the
+  ## augmented solve.  Using the wrong one feeds the network garbage (FOCEi limps
+  ## through it; SAEM's likelihood hits a non-PD matrix).
+  .baseBase <- nnUpdate(.ui)$base[1L]
   nnTorchInit(.aug$id, .aug$K, .aug$H, act = .aug$act, seed = .nn$seed)
   nnTorchOptInit(.aug$id, .nn$optimizer, .nn$lr)
   on.exit(tryCatch(nnTorchFree(.aug$id), silent = TRUE), add = TRUE)
@@ -169,6 +182,7 @@ nlmixr2Est.nn <- function(env, ...) {
   .weightStep <- function(ebes, errPar, thetas) {
     .ad <- .data
     for (.e in names(.aug$covMap)) .ad[[.aug$covMap[[.e]]]] <- ebes[as.character(.ad[[.idCol]])]
+    nnSetMeta(.aug$id, .aug$base, .aug$K, .aug$H, .aug$act)   # augmented weight base
     nnSetWeights(.aug$id, nnTorchWeights(.aug$id))
     .p <- c(thetas, .wPlaceholder)
     .s <- rxode2::rxSolve(.aug$mAug, .ad, params = .p, returnType = "data.frame")
@@ -190,12 +204,34 @@ nlmixr2Est.nn <- function(env, ...) {
     sqrt(mean(.resid^2))
   }
 
+  ## warm-up: a naive-pooled step schedule at zero random effects, from the model
+  ## initial parameters, so the first inner fit sees a non-degenerate network.
+  if (.nn$warmSteps > 0L) {
+    .iniDf <- .ui$iniDf
+    .th0 <- stats::setNames(.iniDf$est[!is.na(.iniDf$ntheta)],
+                            .iniDf$name[!is.na(.iniDf$ntheta)])
+    .errPar0 <- list(add = if (is.na(.aug$errAdd)) 0 else unname(.th0[.aug$errAdd]),
+                     prop = if (is.na(.aug$errProp)) 0 else unname(.th0[.aug$errProp]))
+    if (.errPar0$add == 0 && .errPar0$prop == 0) .errPar0$add <- 1
+    .ids <- as.character(unique(.data[[.idCol]]))
+    .ebes0 <- stats::setNames(rep(0, length(.ids)), .ids)
+    for (.ws in seq_len(.nn$warmSteps)) .weightStep(.ebes0, .errPar0, .th0)
+  }
+
   .parHist <- vector("list", .nn$rounds)
   .fit <- NULL
   for (.round in seq_len(.nn$rounds)) {
-    nnSetWeights(.aug$id, nnTorchWeights(.aug$id))
+    ## Inject the current weights BOTH ways so the inner fit sees them regardless
+    ## of estimator: (a) the par-loader (FOCEi's solve hits rxCallParLoaders) via
+    ## nnSetWeights, and (b) the data covariate columns -- SAEM's estimation kernel
+    ## does NOT call the par-loader, so it reads the weights straight from the data.
+    nnSetMeta(.aug$id, .baseBase, .aug$K, .aug$H, .aug$act)   # base-model weight base
+    .w <- nnTorchWeights(.aug$id)
+    nnSetWeights(.aug$id, .w)
+    .dw <- .data
+    for (.j in seq_along(.aug$weights)) .dw[[.aug$weights[.j]]] <- .w[.j]
     .fit <- suppressWarnings(suppressMessages(
-      nlmixr2est::nlmixr2(.ui, .data, est = .innerEst, control = .innerCtl)))
+      nlmixr2est::nlmixr2(.ui, .dw, est = .innerEst, control = .innerCtl)))
     .latent <- names(.aug$covMap)[1L]              # single latent eta name (MVP)
     .ebes <- stats::setNames(.fit$eta[[.latent]], as.character(.fit$eta[["ID"]]))
     .thetas <- .fit$theta
