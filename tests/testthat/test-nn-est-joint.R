@@ -58,6 +58,50 @@ test_that("joint nn training co-optimizes params + weights and recovers MM+IIV",
   expect_equal(length(rxode2::rxForcedPars(f$ui)), nW)
 })
 
+test_that("joint nn training interleaves a variational inner estimator (ADVI iters knob)", {
+  skip_on_cran()
+  skip_if_not_installed("rxode2")
+  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
+  if (!ok) skip("libtorch backend not available")
+  .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
+  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  rxode2::setRxThreads(1L)
+
+  set.seed(1); ns <- 8L; etaTrue <- rnorm(ns, 0, sqrt(0.15))
+  mm <- rxode2::rxode2("d/dt(centr) = -(2*exp(eV))*centr/(3+centr)")
+  data <- do.call(rbind, lapply(1:ns, function(id) {
+    s <- rxode2::rxSolve(mm, data.frame(id = id, time = c(0, 0.5, 1, 2, 4, 6, 8, 10),
+           evid = c(1, rep(0, 7)), cmt = 1, amt = c(10, rep(0, 7))),
+           params = c(eV = etaTrue[id]), returnType = "data.frame")
+    s <- s[s$time > 0, ]
+    data.frame(id = id, time = c(0, s$time), evid = c(1, rep(0, nrow(s))), cmt = 1,
+               amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr + rnorm(nrow(s), 0, 0.1)))
+  }))
+
+  nnClearMeta()
+  modF <- function() {
+    ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
+    model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+            d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
+            centr ~ add(add.sd) })
+  }
+  ## joint mode with an ADVI inner: interleave uses the `iters` knob -- each round
+  ## a warm-started partial variational fit (outerPerRound iters, resuming from the
+  ## previous round's ui) + a torch weight step, genuinely co-descending.
+  f <- suppressWarnings(suppressMessages(
+    nlmixr2est::nlmixr2(modF, nnCovData(data), "advi",
+      nlmixr2est::adviControl(),
+      nn = nnControl(mode = "joint", rounds = 6L, outerPerRound = 30L, wSteps = 6L,
+                     lr = 0.03, tol = 5e-3, seed = 5L))))
+
+  expect_true(is.finite(f$objf))
+  ph <- f$nnParHist
+  expect_true(all(c("objf", "wChange", "objfChange") %in% names(ph)))
+  expect_true(f$nnRounds == nrow(ph) && nrow(ph) <= 6L)
+  ebes <- setNames(f$eta$eta.nn, f$eta$ID)
+  expect_gt(abs(cor(ebes[order(as.integer(names(ebes)))], etaTrue)), 0.7)
+})
+
 test_that("nn training warm-starts from a model that already carries trained weights", {
   skip_on_cran()
   skip_if_not_installed("rxode2")

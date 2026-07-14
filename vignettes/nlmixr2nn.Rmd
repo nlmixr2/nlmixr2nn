@@ -105,8 +105,11 @@ optimized:
   network weights in one interleaved loop: each round takes a few *partial*,
   warm-started inner iterations and a torch weight step, so the parameters and
   weights descend *together*. This is the DeepPumas-style approach. True
-  interleaving needs an inner estimator that exposes `maxOuterIterations` (the
-  FOCEi family); with any other estimator it degrades to the iterative loop.
+  interleaving needs an inner estimator whose partial fit *resumes* from the
+  previous round's estimates: the FOCEi family (`maxOuterIterations`) and the
+  variational methods `advi`/`vae` (`iters`). SAEM/fSAEM (whose stochastic-
+  approximation chain restarts each call) and `imp`/`qrpem` degrade to the
+  iterative loop, which is just as good for them.
 - **`mode = "iter"`** -- runs a *full* inner fit each round with the weights held
   fixed, then updates the weights: a simpler solve/update/solve scheme. Useful
   when you want each round to be an ordinary, fully converged fit.

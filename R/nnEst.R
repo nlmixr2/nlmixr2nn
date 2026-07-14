@@ -208,13 +208,32 @@
   unname(.w)
 }
 
+## Which control field caps the inner outer iterations -- the knob that makes a
+## partial, warm-startable step for mode="joint"?  Detected by field presence so
+## it is estimator-agnostic: maxOuterIterations (FOCEi family: focei/foce/foi/
+## laplace/agq + the mu*/i* variants) or iters (the variational advi/vae).  Both
+## genuinely RESUME from a ui carrying the previous round's estimates (a gradient
+## optimizer restarts at those estimates; the variational fit re-optimizes from
+## that point), so warm-started partial steps co-descend with the weight steps.
+## Returns NULL for estimators that do NOT resume this way -- saem/fsaem (the
+## stochastic-approximation gain sequence restarts each call, so nEm chunks do not
+## resume the SA chain and interleave is no better than a full fit) and imp/qrpem/
+## nlm-family (no outer-iteration knob) -- which use the block-coordinate iterate
+## loop instead.
+.nnInterleaveKnob <- function(ctl) {
+  if (!is.null(ctl$maxOuterIterations)) return("maxOuterIterations")
+  if (!is.null(ctl$iters))              return("iters")
+  NULL
+}
+
 ## Run the NN training loop.  `env` carries ui/data + the standard inner estimator
 ## (class(env)[1]) and its control (env$control); `sched` is an nnControl().
 ## mode="joint" interleaves warm-started PARTIAL inner steps (outerPerRound outer
-## iterations) with weight steps -- co-descending parameters and weights -- and
-## falls back to the block-coordinate iterate loop for inner estimators without a
-## partial outer step; mode="iter" runs a full inner fit each round.  The last
-## inner fit is the returned deliverable, with tables/covariance added post-hoc.
+## iterations, via the estimator's outer-step knob) with weight steps -- co-
+## descending parameters and weights -- and falls back to the block-coordinate
+## iterate loop for inner estimators without a partial outer step; mode="iter"
+## runs a full inner fit each round.  The last inner fit is the returned
+## deliverable, with tables/covariance added post-hoc.
 .nnRun <- function(env, sched) {
   .ui <- rxode2::rxUiDecompress(env$ui)
   .data <- env$data
@@ -251,8 +270,8 @@
   .latent <- names(.aug$covMap)[1L]
 
   ## true interleave only when the inner estimator exposes a partial outer step
-  .interleave <- sched$mode == "joint" && !is.null(.innerCtl$maxOuterIterations)
-  if (.interleave) .innerCtl$maxOuterIterations <- sched$outerPerRound
+  .knob <- .nnInterleaveKnob(.innerCtl)
+  .interleave <- sched$mode == "joint" && !is.null(.knob)
   if (sched$mode == "joint" && !.interleave) {
     message(sprintf("est=\"%s\" has no partial outer step; nn joint uses the iterative loop",
                     .innerEst))
@@ -288,8 +307,10 @@
     for (.j in seq_along(.aug$weights)) .dw[[.aug$weights[.j]]] <- .w[.j]
     ## interleave: warm-started PARTIAL step from the previous ui; else full fit
     .fitUi <- if (.interleave) .curUi else .ui
+    .roundCtl <- .innerCtl
+    if (.interleave) .roundCtl[[.knob]] <- sched$outerPerRound
     .fit <- suppressWarnings(suppressMessages(
-      nlmixr2est::nlmixr2(.fitUi, .dw, est = .innerEst, control = .innerCtl)))
+      nlmixr2est::nlmixr2(.fitUi, .dw, est = .innerEst, control = .roundCtl)))
     if (.interleave) .curUi <- .fit$ui                       # warm-start next round
     .ebes <- stats::setNames(.fit$eta[[.latent]], as.character(.fit$eta[["ID"]]))
     .thetas <- .fit$theta
