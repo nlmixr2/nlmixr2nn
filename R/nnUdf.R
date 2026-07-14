@@ -58,10 +58,9 @@ nn <- function(..., n_hidden = 5L,
   if (!is.null(.nm)) .dots <- .dots[.nm == "" | is.na(.nm)]
   .inputs <- vapply(.dots, function(e) deparse1(e), character(1))
   K <- length(.inputs)
-  if (K < 1L) stop("nn() needs at least one state input", call. = FALSE)
-  if (K > 2L) {
-    stop("nn() currently supports 1 or 2 inputs (nn1/nn2); more coming",
-         call. = FALSE)
+  if (K < 1L) stop("nn() needs at least one input", call. = FALSE)
+  if (K > 4L) {
+    stop("nn() supports 1 to 4 inputs (nn1..nn4)", call. = FALSE)
   }
   H <- as.integer(n_hidden)
   checkmate::assertIntegerish(H, lower = 1L, len = 1L, .var.name = "n_hidden")

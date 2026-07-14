@@ -66,3 +66,22 @@ test_that("par-loader hook injects buffer weights into par_ptr each solve", {
   nnSetWeights(0, w2)
   expect_equal(solveY(), refF(w2, 0.5), tolerance = 1e-8)
 })
+
+test_that("nn() accepts 1 to 4 inputs and rejects more", {
+  skip_if_not_installed("rxode2")
+  on.exit(nnClearMeta(), add = TRUE)
+  for (kk in 1:4) {
+    nnClearMeta()
+    ins <- paste(c("centr", "WT", "AGE", "SEX")[seq_len(kk)], collapse = ", ")
+    modTxt <- sprintf("function() { model({ g <- nn(%s, n_hidden = 2L); d/dt(centr) <- -g*centr }) }", ins)
+    ui <- eval(parse(text = paste0("rxode2::rxode2(", modTxt, ")")))
+    reg <- nlmixr2nn:::.nnEnv$reg[[1L]]
+    expect_equal(reg$K, kk)
+    expect_equal(length(reg$weights), 2L * kk + 2L * 2L + 1L)   # H*K + 2H + 1, H=2
+  }
+  ## 5 inputs is rejected
+  nnClearMeta()
+  expect_error(
+    rxode2::rxode2(function() { model({ g <- nn(a, b, c, d, e, n_hidden = 2L); d/dt(a) <- -g*a }) }),
+    "1 to 4 inputs")
+})
