@@ -247,15 +247,17 @@ qspFit <- nlmixr2est::nlmixr2(qspMod, nnCovData(qsp), "bobyqa", nn = nnControl(r
 
 With no eta there is nothing to alternate, so the block-coordinate loop is not used:
 the weights are fit directly as a population problem with the chosen optimizer over
-the analytic sensitivity solve, then the fit is materialized at those weights. The
-trained network recovers the concentration-dependent rate:
+the analytic sensitivity solve. The nlm family now reads the injected weights
+natively (the nlm log-likelihood model declares them as covariates), so this is a
+real `bobyqa` fit. The trained network is baked into the model as `rxForcedPars()`,
+so solving the fitted model reproduces the true (concentration-dependent) dynamics:
 
 ```{r, eval = .hasTorch}
-nnSetWeights(0L, qspFit$nnWeights)
-cc <- c(1, 3, 6, 9)
-data.frame(centr = cc,
-           rate_learned = 1 / (1 + exp(-vapply(cc, function(c) nn1(0L, c), numeric(1)))),
-           rate_true    = 2 / (3 + cc))
+newd     <- nnCovData(data.frame(time = c(0, 0.5, 1, 2, 4, 6, 8, 10),
+                                 evid = c(1, rep(0, 7)), cmt = 1, amt = c(10, rep(0, 7))))
+fittedSol <- rxode2::rxSolve(qspFit$finalUi, newd, returnType = "data.frame")
+trueSol   <- rxode2::rxSolve(truth, newd, returnType = "data.frame")
+data.frame(time = fittedSol$time, fitted = round(fittedSol$centr, 2), true = round(trueSol$centr, 2))
 ```
 
 The same model fit with `est = "focei"` (which supports random effects) would add a

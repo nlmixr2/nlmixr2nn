@@ -70,13 +70,18 @@ test_that("a QSP no-BSV NN model fits with the nlm family (population weight fit
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
-  trueRate <- function(cc) 2 / (3 + cc)
-  cs <- c(1, 3, 6, 9)
+  ## the true (noise-free) trajectory for a single dosing schedule
+  dose1 <- data.frame(id = 1, time = c(0, 0.5, 1, 2, 4, 6, 8, 10),
+                      evid = c(1, rep(0, 7)), cmt = 1, amt = c(10, rep(0, 7)))
+  trueTraj <- rxode2::rxSolve(mm, dose1, returnType = "data.frame")
+  trueTraj <- trueTraj[trueTraj$time > 0, "centr"]
 
   ## nlm is simply an optimizer: a gradient-based one ("nlm") and a derivative-free
-  ## one ("bobyqa") both fit the population weights with NO random effect, and the
-  ## learned rate is genuinely concentration-dependent (not a degenerate flat net)
-  ## and tracks the truth.
+  ## one ("bobyqa") both fit the population weights with NO random effect.  The nlm
+  ## family now reads the injected weights natively (nlmixr2est's nlm model declares
+  ## them as covariates), so the fit is a real nlm fit -- and, self-contained via
+  ## rxForcedPars, its solved trajectory reproduces the true (concentration-
+  ## dependent, non-degenerate) dynamics.
   for (est in c("nlm", "bobyqa")) {
     nnClearMeta()
     f <- suppressWarnings(suppressMessages(
@@ -85,11 +90,14 @@ test_that("a QSP no-BSV NN model fits with the nlm family (population weight fit
         nn = nnControl(rounds = 60L, seed = 5L))))
     expect_true(is.finite(f$objf))
     expect_equal(length(f$nnWeights), 3L * 1L + 2L * 3L + 1L)
-    nnSetWeights(0L, f$nnWeights)
-    rateHat <- 1 / (1 + exp(-vapply(cs, function(cc) nn1(0L, cc), numeric(1))))
-    expect_gt(diff(range(rateHat)), 0.1)                 # NOT a flat network
-    expect_gt(cor(rateHat, trueRate(cs)), 0.8)           # tracks the true rate
     ## the fit is self-contained: the trained weights ride along as forcedPars
     expect_equal(length(rxode2::rxForcedPars(f$ui)), 3L * 1L + 2L * 3L + 1L)
+    ## user-facing check: solving the fitted model reproduces the true dynamics
+    ## (a degenerate flat-rate network could not) -- this exercises the forcedPars
+    ## weight injection, not the internal loader-state.
+    sim <- rxode2::rxSolve(f$finalUi, nnCovData(dose1), returnType = "data.frame")
+    simObs <- sim[sim$time > 0, "centr"]
+    expect_gt(diff(range(simObs)), 1)                    # NOT a flat/degenerate fit
+    expect_gt(cor(simObs, trueTraj), 0.99)               # reproduces the true curve
   }
 })

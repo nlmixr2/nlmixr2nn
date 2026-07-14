@@ -203,6 +203,19 @@
 .nnNlmOptimizers <- c("nlm", "nlminb", "optim", "lbfgsb3c", "n1qn1",
                       "bobyqa", "newuoa", "uobyqa")
 
+## The nn weight block's base par_ptr index in the nlm-family SOLVE model.  The
+## nlm log-likelihood model declares params(THETA[1..nTheta], DV, allCovs) (see
+## nlmixr2est's rxUiGet.nlmParams), so the weights sit after the thetas and the
+## inserted DV -- a DIFFERENT base than the standard [thetas, covariates] layout
+## nnUpdate() resolves for the base model / FOCEi.  Returns NA if the weights are
+## not in allCovs (then the caller falls back to FOCEi materialization).
+.nnNlmBase <- function(ui, aug) {
+  .nTheta <- length(which(!ui$iniDf$fix))
+  .order <- c(paste0("THETA[", seq_len(.nTheta), "]"), "DV", ui$allCovs)
+  .b <- match(aug$weights[1L], .order) - 1L
+  if (length(.b) != 1L || is.na(.b)) NA_integer_ else .b
+}
+
 ## Dispatch the population weight fit to any nlm-family optimizer -- nlm is simply
 ## an optimizer.  The gradient-based nlminb/nlm/optim(BFGS)/lbfgsb3c/n1qn1 use the
 ## analytic sensitivity gradient; the derivative-free minqa family bobyqa/newuoa/
@@ -365,36 +378,55 @@
                    prop = if (is.na(.aug$errProp)) 0 else unname(.th0[.aug$errProp]))
 
   ## QSP / no between-subject variability: an nlm-family estimator is a pure
-  ## population optimizer -- it rejects random-effects models, and (unlike FOCEi)
-  ## its own solve does NOT read the injected NN weights, so the block-coordinate
-  ## loop cannot use it.  Instead fit the weights directly as a population problem
-  ## with that optimizer over the augmented sensitivity solve (which DOES read the
-  ## weights), then materialize the fit at the trained weights with FOCEi (which
-  ## reads them and estimates the residual error / any Omega; the weights are fixed
-  ## covariates).  This is "run an nlm-family optimizer without between-subject
-  ## variability" -- the weights are the optimized vector, no random effect.
+  ## population optimizer -- it rejects random-effects models, and it cannot
+  ## OPTIMIZE the network weights (they are covariates, not in its parameter
+  ## vector).  So the weights are fit directly as a population problem with that
+  ## optimizer over the augmented sensitivity solve (which reads the weights), then
+  ## the fit is materialized at the fixed trained weights with the SAME nlm-family
+  ## estimator -- whose solve now reads the weights natively (nlmixr2est's nlm model
+  ## declares them as covariates), at the nlm-model weight base.  If the nlm base is
+  ## not resolvable, or the model still carries a random effect (which the nlm family
+  ## rejects), materialization falls back to FOCEi.  This is "run an nlm-family
+  ## optimizer without between-subject variability".
   if (.innerEst %in% .nnNlmOptimizers) {
-    if (.hasEta) {
-      message(sprintf(paste0("est=\"%s\" is population-only; the nn() random effect ",
-                             "is fit as a fixed effect (eta = 0)"), .innerEst))
-    }
     .wFit <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder, .th0, .errPar0,
                              nnTorchWeights(.aug$id), .innerEst, sched$rounds)
     nnTorchSetWeights(.aug$id, .wFit)
-    nnSetMeta(.aug$id, .baseBase, .aug$K, .aug$H, .aug$act)       # base-model weight base
-    nnSetWeights(.aug$id, .wFit)
+    .trained <- stats::setNames(.wFit, .aug$weights)
     .dw <- .data
     for (.j in seq_along(.aug$weights)) .dw[[.aug$weights[.j]]] <- .wFit[.j]
-    ## materialize the fit at the fixed trained weights (FOCEi reads them)
-    .matCtl <- nlmixr2est::foceiControl(print = 0L, calcTables = FALSE,
-                                        maxInnerIterations = if (.hasEta) 30L else 1L,
-                                        maxOuterIterations = 30L)
-    .fit <- suppressWarnings(suppressMessages(
-      nlmixr2est::nlmixr2(.ui, .dw, est = "focei", control = .matCtl)))
-    message(sprintf("nn: population (no-BSV) weight fit via %s, materialized with focei",
-                    .innerEst))
-    .trained <- stats::setNames(.wFit, .aug$weights)
-    .fit <- .nnAddTablesCov(.fit, .wFit, .baseBase, .aug, "focei", .origTablesCov)
+    .nlmBase <- if (.hasEta) NA_integer_ else .nnNlmBase(.ui, .aug)
+    if (!is.na(.nlmBase)) {
+      ## native nlm materialization: the nlm solve reads the weights at the nlm-model
+      ## base; nlm estimates the residual error at the fixed weights.
+      nnSetMeta(.aug$id, .nlmBase, .aug$K, .aug$H, .aug$act)
+      nnSetWeights(.aug$id, .wFit)
+      .matCtl <- .innerCtl
+      if (!is.null(.matCtl$calcTables)) .matCtl$calcTables <- FALSE
+      .fit <- suppressWarnings(suppressMessages(
+        nlmixr2est::nlmixr2(.ui, .dw, est = .innerEst, control = .matCtl)))
+      .matEst <- .innerEst
+      message(sprintf("nn: population (no-BSV) fit via %s (native weight-reading solve)",
+                      .innerEst))
+    } else {
+      ## fallback: nlm base unresolved or a random effect is present -> FOCEi reads
+      ## the weights and estimates the residual error / any Omega.
+      if (.hasEta) {
+        message(sprintf(paste0("est=\"%s\" is population-only; the nn() random effect ",
+                               "is materialized with focei"), .innerEst))
+      }
+      nnSetMeta(.aug$id, .baseBase, .aug$K, .aug$H, .aug$act)
+      nnSetWeights(.aug$id, .wFit)
+      .matCtl <- nlmixr2est::foceiControl(print = 0L, calcTables = FALSE,
+                                          maxInnerIterations = if (.hasEta) 30L else 1L,
+                                          maxOuterIterations = 30L)
+      .fit <- suppressWarnings(suppressMessages(
+        nlmixr2est::nlmixr2(.ui, .dw, est = "focei", control = .matCtl)))
+      .matEst <- "focei"
+      message(sprintf("nn: population (no-BSV) weight fit via %s, materialized with focei",
+                      .innerEst))
+    }
+    .fit <- .nnAddTablesCov(.fit, .wFit, .baseBase, .aug, .matEst, .origTablesCov)
     .fitEnv <- .fit$env
     .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
     rxode2::rxForcedPars(.storedUi) <- .trained
