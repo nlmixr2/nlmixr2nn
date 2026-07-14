@@ -10,14 +10,25 @@
 ## The final fit is the last inner base-model nlmixr2FitData with the trained
 ## weights attached as rxForcedPars so predict()/simulate() are self-contained.
 
-## Parse the single additive endpoint from the normalized model lines:
-## `<state> ~ add(<sdName>)`.  Returns list(state, sd) or NULL.
+## Parse the single (Gaussian) endpoint from the normalized model lines:
+## `<pred> ~ add(<a>)`, `~ prop(<b>)`, or `~ add(<a>) + prop(<b>)`.  Returns
+## list(state = pred var, add = additive-sd param or NA, prop = proportional-sd
+## param or NA), or NULL when the error model is unsupported / not found.
 .nnErrEndpoint <- function(lines) {
-  .re <- "^\\s*([A-Za-z._][A-Za-z0-9._]*)\\s*~\\s*add\\(\\s*([A-Za-z._][A-Za-z0-9._]*)\\s*\\)\\s*$"
+  .re <- "^\\s*([A-Za-z._][A-Za-z0-9._]*)\\s*~\\s*(.+?)\\s*$"
   .m <- regmatches(lines, regexec(.re, lines))
   .hit <- Filter(function(x) length(x) == 3L, .m)
   if (length(.hit) != 1L) return(NULL)
-  list(state = .hit[[1L]][[2L]], sd = .hit[[1L]][[3L]])
+  .var <- .hit[[1L]][[2L]]
+  .rhs <- .hit[[1L]][[3L]]
+  .term <- function(fn) {
+    .r <- sprintf("\\b%s\\(\\s*([A-Za-z._][A-Za-z0-9._]*)\\s*\\)", fn)
+    if (!grepl(.r, .rhs)) return(NA_character_)
+    regmatches(.rhs, regexec(.r, .rhs))[[1L]][[2L]]
+  }
+  .add <- .term("add"); .prop <- .term("prop")
+  if (is.na(.add) && is.na(.prop)) return(NULL)   # only add/prop/combined for now
+  list(state = .var, add = .add, prop = .prop)
 }
 
 ## d(prediction)/d(state) for each ODE state, so the prediction's forward
@@ -103,7 +114,7 @@
        base = .nnWeightBase(rxode2::rxode2(.augBase), .m$id, .m$K, .m$H),
        id = .m$id, K = .m$K, H = .m$H, act = .m$act,
        weights = .m$weights, nW = .nW, covMap = .covMap, realCovs = .realCovs,
-       endpoint = .end$state, sdName = .end$sd,
+       endpoint = .end$state, errAdd = .end$add, errProp = .end$prop,
        predswCols = sprintf("rx_predsw_%d_", seq_len(.nW) - 1L))
 }
 
@@ -147,25 +158,31 @@ nlmixr2Est.nn <- function(env, ...) {
   .dv <- .data[[if ("DV" %in% names(.data)) "DV" else "dv"]]
   .wPlaceholder <- stats::setNames(rep(0, .aug$nW), .aug$weights)
 
-  ## one torch weight step from the per-subject EBEs + current residual SD.
-  ## `thetas` are the fitted population parameters -- supplied so NN inputs that
-  ## are computed parameters (e.g. `nn(cl, eta.nn)` with `cl <- exp(tcl)`) take
-  ## their fitted values in the augmented solve; NN input covariates (e.g. WT)
-  ## ride in the data.
-  .weightStep <- function(ebes, sigma, thetas) {
+  ## one torch weight step from the per-subject EBEs + current error parameters.
+  ## `errPar` = list(add, prop) fitted residual-error params; the Gaussian
+  ## cotangent dLL/df for variance R(f) = add^2 + (prop*f)^2 is
+  ##   dLL/df = (dv-f)/R + 0.5*((dv-f)^2/R^2 - 1/R) * dR/df,  dR/df = 2*prop^2*f,
+  ## covering additive, proportional and combined error (additive reduces to
+  ## (dv-f)/add^2).  `thetas` are the fitted population parameters -- supplied so
+  ## NN inputs that are computed parameters take their fitted values; NN input
+  ## covariates ride in the data.
+  .weightStep <- function(ebes, errPar, thetas) {
     .ad <- .data
     for (.e in names(.aug$covMap)) .ad[[.aug$covMap[[.e]]]] <- ebes[as.character(.ad[[.idCol]])]
     nnSetWeights(.aug$id, nnTorchWeights(.aug$id))
     .p <- c(thetas, .wPlaceholder)
     .s <- rxode2::rxSolve(.aug$mAug, .ad, params = .p, returnType = "data.frame")
-    .ik <- match(paste(.data[[.idCol]][.obs], .data$time[.obs]),
-                 paste(.s$id, .s$time))
-    .resid <- .dv[.obs] - .s[[.aug$endpoint]][.ik]
-    .dLLdf <- .resid / sigma^2
     if (!all(.aug$predswCols %in% names(.s))) {
       stop("est = 'nn': augmented solve is missing the prediction-sensitivity ",
            "columns (rx_predsw_*)", call. = FALSE)
     }
+    .ik <- match(paste(.data[[.idCol]][.obs], .data$time[.obs]),
+                 paste(.s$id, .s$time))
+    .f <- .s[[.aug$endpoint]][.ik]
+    .resid <- .dv[.obs] - .f
+    .R <- errPar$add^2 + (errPar$prop * .f)^2
+    .dRdf <- 2 * errPar$prop^2 * .f
+    .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
     .dLLdw <- vapply(.aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
     nnTorchZeroGrad(.aug$id)
     nnTorchSetGrad(.aug$id, -.dLLdw)
@@ -181,11 +198,13 @@ nlmixr2Est.nn <- function(env, ...) {
       nlmixr2est::nlmixr2(.ui, .data, est = .innerEst, control = .innerCtl)))
     .latent <- names(.aug$covMap)[1L]              # single latent eta name (MVP)
     .ebes <- stats::setNames(.fit$eta[[.latent]], as.character(.fit$eta[["ID"]]))
-    .sigma <- .fit$theta[[.aug$sdName]]
     .thetas <- .fit$theta
-    for (.ws in seq_len(.nn$wSteps)) .rmse <- .weightStep(.ebes, .sigma, .thetas)
+    .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
+                    prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
+    for (.ws in seq_len(.nn$wSteps)) .rmse <- .weightStep(.ebes, .errPar, .thetas)
     .parHist[[.round]] <- data.frame(round = .round, objf = .fit$objf,
-                                     add.sd = .sigma, rmse = .rmse)
+                                     errAdd = .errPar$add, errProp = .errPar$prop,
+                                     rmse = .rmse)
   }
 
   ## finalize: the last inner fit is the base-model fit; bake the trained weights
