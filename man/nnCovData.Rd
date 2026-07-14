@@ -15,6 +15,6 @@ nnCovData(data)
 \description{
 The `nn()` UDF declares each network's weights as covariates; this adds a
 0-valued column per weight to `data` so the model solves.  The par-loader
-(population weights) and the FOCEI inner hook (individual weights) overwrite
-these slots on every solve, so the placeholder value is irrelevant.
+overwrites these slots with the network weights on every solve, so the
+placeholder value is irrelevant.
 }
