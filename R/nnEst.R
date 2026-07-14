@@ -20,6 +20,28 @@
   list(state = .hit[[1L]][[2L]], sd = .hit[[1L]][[3L]])
 }
 
+## d(prediction)/d(state) for each ODE state, so the prediction's forward
+## sensitivity wrt a weight can be chained from the state sensitivities rx_sw:
+## d(pred)/dw = sum_s d(pred)/d(s) * rx_sw_s.  When the prediction IS a state
+## this is the identity (1 for that state); when it is an lhs (e.g. cp = centr/V)
+## the chain is nontrivial.  Returns a character vector of derivative expressions
+## (rxode2 syntax) named by state.
+.nnDpDs <- function(modelText, states, predVar) {
+  if (predVar %in% states) {
+    return(stats::setNames(as.character(as.integer(states == predVar)), states))
+  }
+  .model <- rxode2::rxS(rxode2::rxGetModel(modelText), TRUE, promoteLinSens = FALSE)
+  .p <- get0(predVar, envir = .model, inherits = FALSE)
+  if (is.null(.p)) {
+    stop("est = 'nn': cannot resolve the prediction variable '", predVar, "'",
+         call. = FALSE)
+  }
+  vapply(states, function(s) {
+    .dd <- symengine::D(.p, symengine::Symbol(s))   # bind before rxFromSE (NSE)
+    rxode2::rxFromSE(.dd)
+  }, character(1))
+}
+
 ## Auto-build the ephemeral augmented model from a base nn() ui: drop the weight
 ## dummy-covariate line and the error line, rename the latent eta(s) to
 ## covariates, declare param(weights, latent covariates), and hand to
@@ -54,13 +76,35 @@
   .augBase <- paste(c(.param, .keep), collapse = "\n")
   .augText <- nnAugmentModel(.augBase, H = .m$H)
   .nW <- .m$H * .m$K + 2L * .m$H + 1L
+  ## prediction forward sensitivity wrt each weight, chained through the states:
+  ## rx_predsw_<j>_ = sum_s d(pred)/d(s) * rx_sw_<s>_<j>_.  Emitting this as an lhs
+  ## makes the endpoint work whether it is a raw state or an lhs (e.g. cp=centr/V)
+  ## with no per-endpoint code in the weight step.
+  .states <- rxode2::rxStateOde(rxode2::rxS(rxode2::rxGetModel(.augBase), TRUE,
+                                            promoteLinSens = FALSE))
+  .dpds <- .nnDpDs(.augBase, .states, .end$state)
+  if (all(.dpds == "0")) {
+    stop("est = 'nn': the prediction '", .end$state,
+         "' does not depend on any ODE state -- nothing for the network to fit",
+         call. = FALSE)
+  }
+  .predsw <- vapply(seq_len(.nW) - 1L, function(j) {
+    .terms <- character(0)
+    for (.si in seq_along(.states)) {
+      if (!identical(.dpds[[.si]], "0") && nzchar(.dpds[[.si]])) {
+        .terms <- c(.terms, sprintf("(%s)*rx_sw_%s_%d_", .dpds[[.si]], .states[.si], j))
+      }
+    }
+    sprintf("rx_predsw_%d_ = %s", j, paste(.terms, collapse = " + "))
+  }, character(1))
+  .augText <- paste(c(.augText, .predsw), collapse = "\n")
   list(text = .augText,
        mAug = rxode2::rxode2(.augText),
        base = .nnWeightBase(rxode2::rxode2(.augBase), .m$id, .m$K, .m$H),
        id = .m$id, K = .m$K, H = .m$H, act = .m$act,
        weights = .m$weights, nW = .nW, covMap = .covMap, realCovs = .realCovs,
        endpoint = .end$state, sdName = .end$sd,
-       swCols = sprintf("rx_sw_%s_%d_", .end$state, seq_len(.nW) - 1L))
+       predswCols = sprintf("rx_predsw_%d_", seq_len(.nW) - 1L))
 }
 
 #' nlmixr2 estimation method for embedded neural networks (`est = "nn"`)
@@ -118,7 +162,11 @@ nlmixr2Est.nn <- function(env, ...) {
                  paste(.s$id, .s$time))
     .resid <- .dv[.obs] - .s[[.aug$endpoint]][.ik]
     .dLLdf <- .resid / sigma^2
-    .dLLdw <- vapply(.aug$swCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
+    if (!all(.aug$predswCols %in% names(.s))) {
+      stop("est = 'nn': augmented solve is missing the prediction-sensitivity ",
+           "columns (rx_predsw_*)", call. = FALSE)
+    }
+    .dLLdw <- vapply(.aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
     nnTorchZeroGrad(.aug$id)
     nnTorchSetGrad(.aug$id, -.dLLdw)
     nnTorchStep(.aug$id)
