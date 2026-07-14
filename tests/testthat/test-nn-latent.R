@@ -10,6 +10,10 @@ test_that("a latent-input NN random effect fits with analytic (non-FD) sensitivi
   skip_on_cran()
   skip_if_not_installed("rxode2")
   nnClearMeta(); on.exit(nnClearMeta(), add = TRUE)
+  ## this test verifies a plain fixed-weight FOCEi fit identifies the latent eta, so
+  ## disable the transparent-training interceptor for the duration.
+  nlmixr2est::removeEstInterceptor("nlmixr2nn")
+  on.exit(nlmixr2nn:::.nnRegisterInterceptor(), add = TRUE)
 
   set.seed(42)
   d <- do.call(rbind, lapply(1:16, function(id) {

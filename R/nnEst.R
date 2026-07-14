@@ -313,7 +313,10 @@
   .dv <- .data[[if ("DV" %in% names(.data)) "DV" else "dv"]]
   .wPlaceholder <- stats::setNames(rep(0, .aug$nW), .aug$weights)
   .weightStep <- .nnWeightStepper(.aug, .data, .idCol, .obs, .dv, .wPlaceholder)
-  .latent <- names(.aug$covMap)[1L]
+  ## eta-free (population UDE) models have no latent input to the network; the
+  ## weight step then solves at the pooled population (no per-subject EBEs).
+  .hasEta <- length(.aug$covMap) > 0L
+  .latent <- if (.hasEta) names(.aug$covMap)[1L] else NA_character_
 
   ## true interleave only when the inner estimator exposes a partial outer step
   .knob <- .nnInterleaveKnob(.innerCtl)
@@ -371,7 +374,9 @@
     .fit <- suppressWarnings(suppressMessages(
       nlmixr2est::nlmixr2(.fitUi, .dw, est = .innerEst, control = .roundCtl)))
     if (.interleave) .curUi <- .fit$ui                       # warm-start next round
-    .ebes <- stats::setNames(.fit$eta[[.latent]], as.character(.fit$eta[["ID"]]))
+    .ebes <- if (.hasEta) {
+      stats::setNames(.fit$eta[[.latent]], as.character(.fit$eta[["ID"]]))
+    } else stats::setNames(numeric(0), character(0))         # population: no EBEs
     .thetas <- .fit$theta
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
                     prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
@@ -384,8 +389,9 @@
     .parHist[[.round]] <- data.frame(round = .round, objf = .fit$objf,
                                      errAdd = .errPar$add, errProp = .errPar$prop,
                                      rmse = .rmse, wChange = .wChange, objfChange = .objfChange)
-    ## stop when the weights (and, when interleaving, the objective) stabilise
-    .stop <- .wChange < sched$tol && (!.interleave || .objfChange < sched$tol)
+    ## stop when the weights (and, when interleaving, the objective) stabilise;
+    ## isTRUE guards a NaN change (e.g. an unstable solve) -> keep going, don't crash
+    .stop <- isTRUE(.wChange < sched$tol && (!.interleave || .objfChange < sched$tol))
     if (sched$tol > 0 && .round > 1L && .stop) { .converged <- TRUE; break }
   }
   .parHist <- .parHist[seq_len(.nRun)]

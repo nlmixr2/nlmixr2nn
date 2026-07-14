@@ -1,11 +1,18 @@
-## End-to-end: an nn() model fits under FOCEI.  The covariate-declared weight
-## block (loader-injected) assembles cleanly through FOCEI's theta expansion --
-## the fix that unblocked the native path (param()-declared weights were mangled).
+## End-to-end: an eta-free nn() model (a population UDE -- no latent random effect)
+## trains transparently under FOCEI.  The covariate-declared weight block (loader-
+## injected) assembles cleanly through FOCEI's theta expansion -- the fix that
+## unblocked the native path (param()-declared weights were mangled) -- and the
+## interceptor runs a population weight fit (no per-subject EBEs).
 
-test_that("an nn() model assembles and fits under FOCEI", {
+test_that("an eta-free nn() model assembles and trains under FOCEI (population UDE)", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  nnClearMeta(); on.exit(nnClearMeta(), add = TRUE)
+  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
+  if (!ok) skip("libtorch backend not available")
+  .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
+  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  rxode2::setRxThreads(1L)
+  nnClearMeta()
 
   set.seed(1)
   d <- do.call(rbind, lapply(1:6, function(id) {
@@ -16,22 +23,23 @@ test_that("an nn() model assembles and fits under FOCEI", {
   }))
 
   mod <- function() {
-    ini({ tk <- 0.25; add.sd <- 0.5 })
+    ini({ add.sd <- 0.5 })                        # no eta: a population UDE
     model({
-      g <- nn(centr, n_hidden = 1L, act = "tanh")
-      d/dt(centr) <- -(tk + g) * centr
+      g <- nn(centr, n_hidden = 3L, act = "tanh")
+      d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr   # bounded rate (stable)
       centr ~ add(add.sd)
     })
   }
-  ui <- rxode2::rxode2(mod)
-  d <- nnCovData(d)                       # weight covariate placeholder columns
-  info <- nnUpdate(ui)                    # resolve base + register the layer
-  expect_equal(nrow(info), 1L)
-  nnSetWeights(0L, c(0.3, -0.2, 0.5, 0.1))
-
+  ## transparent workflow: standard est + a small training schedule.  With no
+  ## latent eta the interceptor trains the population network (no EBEs).
   f <- suppressWarnings(suppressMessages(
-    nlmixr2est::nlmixr2(mod, d, est = "focei",
-      control = nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 3L,
-                                         maxInnerIterations = 4L, calcTables = FALSE))))
-  expect_true(is.finite(f$objf))          # FOCEI assembled + ran the nn() model
+    nlmixr2est::nlmixr2(mod, nnCovData(d), "focei",
+      nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 3L,
+                               maxInnerIterations = 4L, calcTables = FALSE),
+      nn = nnControl(mode = "iter", rounds = 3L, wSteps = 4L, lr = 0.03, seed = 1L))))
+
+  expect_true(is.finite(f$objf))                 # FOCEI assembled + ran the nn() model
+  expect_true(nrow(f$nnParHist) >= 1L)           # the population network trained
+  nW <- 3L * 1L + 2L * 3L + 1L                    # H*K + 2H + 1, H=3 K=1
+  expect_equal(length(f$nnWeights), nW)
 })

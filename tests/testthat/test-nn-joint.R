@@ -14,6 +14,10 @@ test_that("alternating torch-weights + FOCEi-latent-Omega recovers population + 
   if (!ok) skip("libtorch backend not available")
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
   on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  ## this test drives its OWN manual block-coordinate loop (plain fixed-weight FOCEi
+  ## fits), so disable the transparent-training interceptor for the duration.
+  nlmixr2est::removeEstInterceptor("nlmixr2nn")
+  on.exit(nlmixr2nn:::.nnRegisterInterceptor(), add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1)
