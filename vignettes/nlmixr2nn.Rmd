@@ -217,7 +217,10 @@ both. For any *other* residual model -- lognormal, transform-both-sides, a custo
 likelihood -- pass `nnControl(cotangent = "exact")`: the per-observation `dLL/df`
 is then taken from the inner fit's likelihood-contribution hook (the exact score
 for whatever error model you wrote), so e.g. `centr ~ lnorm(lsd)` trains. Pair it
-with `wSteps = 1` (the captured cotangent is at the round's weights).
+with `wSteps = 1` (the captured cotangent is at the round's weights). It works with
+every inner estimator: the FOCEi family and `advi`/`vae` capture it during their
+own fit; `imp`/`impmap`/`saem` (whose likelihood does not fire the hook cleanly at
+the fitted etas) get it from a short FOCEi posthoc at the fit's estimates.
 
 ```{r, eval = FALSE}
 nnMod <- function() {

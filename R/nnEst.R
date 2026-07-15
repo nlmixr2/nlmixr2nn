@@ -461,6 +461,14 @@
   ## exact-cotangent path: map each observation row to the inner fit's (internal id,
   ## obs index k) so the captured per-obs cotangent aligns with the augmented solve.
   .exact <- identical(sched$cotangent, "exact")
+  ## methods whose inner fit's FINAL likelihood eval is a clean pass at the fitted
+  ## etas (FOCEi/Laplace family + ADVI/VAE, which are maxOuter=0 FOCEi evals) fire
+  ## the contribution hook cleanly during the fit -> self-capture.  Other methods
+  ## (imp/impmap/qrpem: hook fires at importance draws; saem: kernel bypasses the
+  ## FOCEi inner) get the cotangent from a dedicated FOCEi posthoc at the fit.
+  .exactSelf <- .exact && (.innerEst %in% c("focei", "foce", "foi", "fo",
+                                            "laplace", "agq", "advi", "vae"))
+  .exactPosthoc <- .exact && !.exactSelf
   ## a non-add()/prop() error model has no closed-form Gaussian cotangent -- its
   ## score must come from the inner fit.
   if (is.na(.aug$errAdd) && is.na(.aug$errProp) && !.exact) {
@@ -592,22 +600,36 @@
     .fitUi <- if (.interleave) .curUi else .ui
     .roundCtl <- .innerCtl
     if (.interleave) .roundCtl[[.knob]] <- sched$outerPerRound
-    if (.exact) .nnCapReset(TRUE)                             # arm cotangent capture
+    if (.exactSelf) .nnCapReset(TRUE)                        # self-capture during fit
     .fit <- suppressWarnings(suppressMessages(
       nlmixr2est::nlmixr2(.fitUi, .dw, est = .innerEst, control = .roundCtl)))
     if (.interleave) .curUi <- .fit$ui                       # warm-start next round
-    ## exact per-obs cotangent captured from the inner fit (any residual model);
-    ## fall back to the Gaussian closed form if the hook did not populate every obs.
-    .dLLdfObs <- NULL
+    ## exact per-obs cotangent (any residual model): from the inner fit when it
+    ## self-captures, else from a dedicated FOCEi posthoc at the fit's estimates
+    ## (maxOuter=0 keeps the outer parameters, re-optimizes the EBEs, and fires the
+    ## contribution hook cleanly).  The augmented solve then uses THOSE EBEs.
+    .dLLdfObs <- NULL; .ebeFit <- .fit
     if (.exact) {
+      if (.exactPosthoc) {
+        .nnCapReset(TRUE)
+        .ebeFit <- suppressWarnings(suppressMessages(
+          nlmixr2est::nlmixr2(.fit$finalUi, .dw, est = "focei",
+            nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 0L,
+                                     maxInnerIterations = 30L, calcTables = FALSE))))
+      }
       .cap <- .nnCapGet(); .nnCapReset(FALSE)
       if (!is.null(.cap) && length(.cap$id)) {
         .cand <- .cap$dLLdf[match(.obsKey, .cap$id * 1024L + .cap$k)]
         if (!anyNA(.cand)) .dLLdfObs <- .cand
       }
+      if (is.null(.dLLdfObs) && is.na(.aug$errAdd) && is.na(.aug$errProp)) {
+        stop(sprintf(paste0("nlmixr2nn: cotangent=\"exact\" captured no per-observation ",
+             "cotangents (est=\"%s\"); a non-add()/prop() error model needs the ",
+             "FOCEi contribution hook"), .innerEst), call. = FALSE)
+      }
     }
     .ebes <- if (.hasEta) {
-      stats::setNames(.fit$eta[[.latent]], as.character(.fit$eta[["ID"]]))
+      stats::setNames(.ebeFit$eta[[.latent]], as.character(.ebeFit$eta[["ID"]]))
     } else stats::setNames(numeric(0), character(0))         # population: no EBEs
     .thetas <- .fit$theta
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
