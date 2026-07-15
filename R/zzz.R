@@ -19,6 +19,12 @@
   ## transparent workflow: claim estimations of models containing nn() so a
   ## standard est (focei/saem/...) trains the embedded network (R/nnInterceptor.R)
   .nnRegisterInterceptor()
+  ## rehydrate transient nn shapes from the ui when a saved fit/model is reloaded
+  ## in a fresh session (so predict()/simulate() strides the weights carried in
+  ## rxForcedPars()).  Guarded: older rxode2 lacks the ui-prep hook API.
+  if ("rxRegisterUiPrep" %in% getNamespaceExports("rxode2")) {
+    rxode2::rxRegisterUiPrep("nlmixr2nn:rehydrate", .nnRehydrate)
+  }
 }
 
 .nnTransRows <- function() {
@@ -73,6 +79,9 @@
   }
   ## drop the estimation interceptor, par-loader hook + likelihood contribution
   .nnUnregisterInterceptor()
+  if ("rxRemoveUiPrep" %in% getNamespaceExports("rxode2")) {
+    try(rxode2::rxRemoveUiPrep("nlmixr2nn:rehydrate"), silent = TRUE)
+  }
   try(.Call(`_nlmixr2nn_nnUnregisterLoader`), silent = TRUE)
   try(.Call(`_nlmixr2nn_removeContrib`), silent = TRUE)
   library.dynam.unload("nlmixr2nn", libpath)

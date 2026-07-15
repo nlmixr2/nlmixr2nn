@@ -361,6 +361,49 @@
   unname(.w)
 }
 
+## Read the serialized per-network shape metadata (id/weights/K/H/act) carried on
+## a ui, or NULL.  This is the transient registry (.nnEnv$reg) snapshotted onto
+## the ui at fit time so it survives saveRDS()/reload.
+.nnUiMeta <- function(ui) {
+  .u <- tryCatch(rxode2::rxUiDecompress(ui), error = function(e) ui)
+  if (is.environment(.u) && exists("nnMeta", envir = .u, inherits = FALSE)) {
+    return(get("nnMeta", envir = .u, inherits = FALSE))
+  }
+  NULL
+}
+
+## rxode2 ui-prep hook (registered in .onLoad).  When a saved fit/model carrying
+## nn() is reloaded in a fresh session, the transient shape registry (.nnEnv$reg)
+## is empty, so nnForward() cannot stride the weight block.  Rebuild each of THIS
+## ui's networks' shapes in the C registry -- resolving the block base BY NAME
+## from the current solve-parameter layout (robust to a rebuilt/reordered model).
+## The weight VALUES already arrive via rxForcedPars(); only the shapes are
+## transient.  A no-op during training (the training loop owns the registry and
+## switches bases between the base and augmented models) and for non-nn models.
+.nnRehydrate <- function(ui) {
+  if (isTRUE(.nnEnv$training)) return(invisible())
+  .meta <- .nnUiMeta(ui)
+  if (is.null(.meta) || length(.meta) == 0L) return(invisible())
+  ## restore the R-side registry (used by nnCovData / .nnAugmentFromUi / nnUpdate
+  ## / predict) for any of THIS ui's nets missing from the transient registry.
+  .have <- if (length(.nnEnv$reg)) {
+    vapply(.nnEnv$reg, function(m) m$id, integer(1))
+  } else integer(0)
+  for (.m in .meta) {
+    if (!(.m$id %in% .have)) .nnEnv$reg[[as.character(.m$id)]] <- .m
+  }
+  ## rebuild the C shape registry, resolving the weight-block base BY NAME from
+  ## the current solve-parameter layout (robust to a rebuilt/reordered model).
+  .params <- tryCatch(.nnSolveParams(ui), error = function(e) NULL)
+  if (is.null(.params)) return(invisible())
+  for (.m in .meta) {
+    .idx <- match(.m$weights, .params)
+    if (anyNA(.idx) || any(diff(.idx) != 1L)) next   # not this ui's layout -> skip
+    nnSetMeta(.m$id, .idx[1L] - 1L, .m$K, .m$H, .m$act)
+  }
+  invisible()
+}
+
 ## The GLOBAL weight vector = every network's torch weights concatenated in
 ## aug$nets order (matching the rx_sw/rx_predsw global index).
 .nnAllTorchWeights <- function(aug) {
@@ -427,6 +470,17 @@
   ## exit so it never leaks into an unrelated model's solve.
   .nnLoaderOn()
   on.exit(.nnLoaderOff(), add = TRUE)
+  ## refit of a reloaded fit (fresh session): the model text already carries
+  ## nn<K>() (not nn()), so the UDF will not repopulate the registry -- restore it
+  ## from the ui's persisted shapes so augmentation + warm-start-from-stored work.
+  if (length(.nnEnv$reg) == 0L) {
+    .meta <- .nnUiMeta(.ui)
+    if (!is.null(.meta)) for (.m in .meta) .nnEnv$reg[[as.character(.m$id)]] <- .m
+  }
+  ## the training loop owns the C shape registry (switching bases between the base
+  ## and augmented models); suppress the reload rehydrate hook while it runs.
+  .nnEnv$training <- TRUE
+  on.exit(assign("training", FALSE, envir = .nnEnv), add = TRUE)
 
   .aug <- .nnAugmentFromUi(.ui)
   .data <- nnCovData(.data)
@@ -662,6 +716,16 @@
   .fitEnv <- .fit$env
   .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
   rxode2::rxForcedPars(.storedUi) <- .trained
+  ## snapshot the transient shape registry onto the ui so a reloaded fit can
+  ## rebuild it (.nnRehydrate) and stride the weights carried in rxForcedPars().
+  .nnMeta <- lapply(.nnEnv$reg, function(m) {
+    list(id = m$id, weights = m$weights, K = m$K, H = m$H, act = m$act)
+  })
+  assign("nnMeta", .nnMeta, envir = .storedUi)
+  .sticky <- if (exists("sticky", envir = .storedUi, inherits = FALSE)) {
+    get("sticky", envir = .storedUi, inherits = FALSE)
+  } else character(0)
+  assign("sticky", unique(c(.sticky, "nnMeta")), envir = .storedUi)
   assign("ui", .storedUi, envir = .fitEnv)
   ## NN metadata in the fit env (NOT $<-, which would add a data column)
   assign("nnParHist", do.call(rbind, .parHist), envir = .fitEnv)
