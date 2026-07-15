@@ -15,6 +15,17 @@
            error = function(e) NULL)
 }
 
+## Per-observation error-model cotangent capture (nlmixr2est likelihood-contribution
+## hook).  .nnCapReset(TRUE) clears + arms it before an inner fit; .nnCapGet()
+## returns list(id, k, dLLdf) of the fit's converged per-obs cotangents.  No-op on
+## an nlmixr2est without the lik-contrib API.
+.nnCapReset <- function(on) {
+  tryCatch(.Call("_nlmixr2nn_capReset", on, PACKAGE = "nlmixr2nn"), error = function(e) NULL)
+}
+.nnCapGet <- function() {
+  tryCatch(.Call("_nlmixr2nn_capGet", PACKAGE = "nlmixr2nn"), error = function(e) NULL)
+}
+
 ## NN-in-ODE training engine (.nnRun) for the transparent nlmixr2nn workflow.
 ## It is driven by nlmixr2nn's estimation interceptor (R/nnInterceptor.R): a model
 ## with an nn() term fitted with a standard est (focei/saem/...) is claimed here.
@@ -54,7 +65,9 @@
     regmatches(.rhs, regexec(.r, .rhs))[[1L]][[2L]]
   }
   .add <- .term("add"); .prop <- .term("prop")
-  if (is.na(.add) && is.na(.prop)) return(NULL)   # only add/prop/combined for now
+  ## add/prop give the closed-form Gaussian cotangent; any OTHER error model (add
+  ## and prop both NA, e.g. lnorm / transform-both-sides) still yields the endpoint
+  ## state -- its cotangent then comes from the inner fit (cotangent = "exact").
   list(state = .var, add = .add, prop = .prop)
 }
 
@@ -205,7 +218,11 @@
 ## dLL/dw = sum_obs dLL/df * rx_predsw, and takes one torch optimizer step.
 ## Returns the RMSE.
 .nnWeightStepper <- function(aug, data, idCol, obs, dv, wPlaceholder) {
-  function(ebes, errPar, thetas) {
+  ## weightStep(ebes, errPar, thetas, dLLdfObs = NULL): dLLdfObs, when supplied, is
+  ## the per-observation error-model cotangent captured from the inner fit (the
+  ## EXACT dLL/df for any residual model), aligned to the observation rows; NULL
+  ## uses the closed-form additive/proportional-Gaussian cotangent.
+  function(ebes, errPar, thetas, dLLdfObs = NULL) {
     .ad <- data
     for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- ebes[as.character(.ad[[idCol]])]
     for (.net in aug$nets) {                            # each net at its augmented base
@@ -221,9 +238,13 @@
     .ik <- match(paste(data[[idCol]][obs], data$time[obs]), paste(.s$id, .s$time))
     .f <- .s[[aug$endpoint]][.ik]
     .resid <- dv[obs] - .f
-    .R <- errPar$add^2 + (errPar$prop * .f)^2
-    .dRdf <- 2 * errPar$prop^2 * .f
-    .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
+    if (!is.null(dLLdfObs)) {
+      .dLLdf <- dLLdfObs                               # exact cotangent from the inner fit
+    } else {
+      .R <- errPar$add^2 + (errPar$prop * .f)^2
+      .dRdf <- 2 * errPar$prop^2 * .f
+      .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
+    }
     for (.net in aug$nets) {                            # per-network gradient + step
       .dLLdw <- vapply(.net$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
       nnTorchZeroGrad(.net$id)
@@ -437,6 +458,19 @@
   .hasEta <- length(.aug$covMap) > 0L
   .latent <- if (.hasEta) names(.aug$covMap)[1L] else NA_character_
 
+  ## exact-cotangent path: map each observation row to the inner fit's (internal id,
+  ## obs index k) so the captured per-obs cotangent aligns with the augmented solve.
+  .exact <- identical(sched$cotangent, "exact")
+  ## a non-add()/prop() error model has no closed-form Gaussian cotangent -- its
+  ## score must come from the inner fit.
+  if (is.na(.aug$errAdd) && is.na(.aug$errProp) && !.exact) {
+    stop("nlmixr2nn: this error model has no add()/prop() term; ",
+         "fit with nnControl(cotangent = \"exact\")", call. = FALSE)
+  }
+  .obsIdVals <- .data[[.idCol]][.obs]
+  .obsKey <- (match(.obsIdVals, unique(.obsIdVals)) - 1L) * 1024L +
+    (stats::ave(seq_along(.obsIdVals), .obsIdVals, FUN = function(z) seq_along(z)) - 1L)
+
   ## true interleave only when the inner estimator exposes a partial outer step
   .knob <- .nnInterleaveKnob(.innerCtl)
   .interleave <- sched$mode == "joint" && !is.null(.knob)
@@ -558,16 +592,27 @@
     .fitUi <- if (.interleave) .curUi else .ui
     .roundCtl <- .innerCtl
     if (.interleave) .roundCtl[[.knob]] <- sched$outerPerRound
+    if (.exact) .nnCapReset(TRUE)                             # arm cotangent capture
     .fit <- suppressWarnings(suppressMessages(
       nlmixr2est::nlmixr2(.fitUi, .dw, est = .innerEst, control = .roundCtl)))
     if (.interleave) .curUi <- .fit$ui                       # warm-start next round
+    ## exact per-obs cotangent captured from the inner fit (any residual model);
+    ## fall back to the Gaussian closed form if the hook did not populate every obs.
+    .dLLdfObs <- NULL
+    if (.exact) {
+      .cap <- .nnCapGet(); .nnCapReset(FALSE)
+      if (!is.null(.cap) && length(.cap$id)) {
+        .cand <- .cap$dLLdf[match(.obsKey, .cap$id * 1024L + .cap$k)]
+        if (!anyNA(.cand)) .dLLdfObs <- .cand
+      }
+    }
     .ebes <- if (.hasEta) {
       stats::setNames(.fit$eta[[.latent]], as.character(.fit$eta[["ID"]]))
     } else stats::setNames(numeric(0), character(0))         # population: no EBEs
     .thetas <- .fit$theta
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
                     prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
-    for (.ws in seq_len(sched$wSteps)) .rmse <- .weightStep(.ebes, .errPar, .thetas)
+    for (.ws in seq_len(sched$wSteps)) .rmse <- .weightStep(.ebes, .errPar, .thetas, .dLLdfObs)
     .wNow <- .nnAllTorchWeights(.aug)
     .wChange <- sqrt(sum((.wNow - .wPrev)^2)) / (sqrt(sum(.wPrev^2)) + 1e-8)
     .wPrev <- .wNow

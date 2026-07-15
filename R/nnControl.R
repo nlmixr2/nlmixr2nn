@@ -56,6 +56,12 @@
 #'   fixed-effects starting point (e.g. a population/UDE model with no random
 #'   effect).
 #' @param optimizer torch optimizer, `"adam"` or `"sgd"`.
+#' @param cotangent source of the error-model score `dLL/df` used to form the weight
+#'   gradient: `"gaussian"` (default) uses the closed-form additive/proportional
+#'   Gaussian cotangent; `"exact"` uses the per-observation cotangent captured from
+#'   the inner fit's likelihood contribution hook, which is correct for ANY residual
+#'   model (e.g. lognormal, transform-both-sides) -- best paired with `wSteps = 1`
+#'   (the captured cotangent is at the round's weights).
 #' @param seed optional integer seed for torch weight initialization (ignored when
 #'   the model already carries trained weights, which are used as the start).
 #' @return an object of class `"nnControl"`.
@@ -66,11 +72,12 @@ nnControl <- function(mode = c("joint", "iter"),
                       lr = 0.03, warmSteps = 0L,
                       warmStart = c("lbfgsb3c", "nlminb", "nlm", "optim", "n1qn1",
                                     "bobyqa", "newuoa", "uobyqa", "none", "pop"),
-                      warmPopIters = 3L,
+                      warmPopIters = 3L, cotangent = c("gaussian", "exact"),
                       optimizer = c("adam", "sgd"), seed = NULL) {
   mode <- match.arg(mode)
   optimizer <- match.arg(optimizer)
   warmStart <- match.arg(warmStart)
+  cotangent <- match.arg(cotangent)
   if (warmStart == "pop") warmStart <- "nlminb"    # back-compat alias
   checkmate::assertIntegerish(rounds, lower = 1L, len = 1L, .var.name = "rounds")
   checkmate::assertNumeric(tol, lower = 0, len = 1L, .var.name = "tol")
@@ -83,7 +90,7 @@ nnControl <- function(mode = c("joint", "iter"),
                  wSteps = as.integer(wSteps), outerPerRound = as.integer(outerPerRound),
                  lr = as.numeric(lr), warmSteps = as.integer(warmSteps),
                  warmStart = warmStart, warmPopIters = as.integer(warmPopIters),
-                 optimizer = optimizer,
+                 cotangent = cotangent, optimizer = optimizer,
                  seed = if (is.null(seed)) NULL else as.integer(seed)),
             class = "nnControl")
 }

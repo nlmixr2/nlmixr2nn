@@ -15,6 +15,7 @@ nnControl(
   warmStart = c("lbfgsb3c", "nlminb", "nlm", "optim", "n1qn1", "bobyqa", "newuoa",
     "uobyqa", "none", "pop"),
   warmPopIters = 3L,
+  cotangent = c("gaussian", "exact"),
   optimizer = c("adam", "sgd"),
   seed = NULL
 )
@@ -58,6 +59,13 @@ random effect (weakening eta recovery) and can push an SAEM inner fit into a
 poorly conditioned region -- so raise it only when you want a stronger
 fixed-effects starting point (e.g. a population/UDE model with no random
 effect).}
+
+\item{cotangent}{source of the error-model score `dLL/df` used to form the weight
+gradient: `"gaussian"` (default) uses the closed-form additive/proportional
+Gaussian cotangent; `"exact"` uses the per-observation cotangent captured from
+the inner fit's likelihood contribution hook, which is correct for ANY residual
+model (e.g. lognormal, transform-both-sides) -- best paired with `wSteps = 1`
+(the captured cotangent is at the round's weights).}
 
 \item{optimizer}{torch optimizer, `"adam"` or `"sgd"`.}
 
