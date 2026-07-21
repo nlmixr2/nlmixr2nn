@@ -313,8 +313,36 @@
 ## the model ini.  `est` names the nlm-family optimizer.  The objective is the
 ## pooled -2 log-likelihood with the analytic d(-2LL)/dw from the augmented
 ## rx_predsw sensitivities.  Returns the fitted weight vector (aug$weights order).
+## One exact-cotangent evaluation for the nlm population weight fit.  Bakes the
+## current weights (w) into the nlm data columns, LOADS + solves the nlm objective
+## once via nlmixr2est's population engine -- which fires the lik-contrib hook, so
+## the EXACT per-obs error-model score d(LL)/d(f) is captured in C++ (any
+## prediction-based error model, censoring included) rather than re-derived from
+## the closed-form Gaussian add/prop formula.  Returns list(obj = -2LL, dLLdf
+## aligned to the observation rows), or NULL to fall back to the Gaussian score.
+## A fresh setup per call is required (and correct): the weights enter the solve
+## as data covariates, so they are baked in at setup time.
+.nnNlmExactCotangent <- function(ctx, aug, adata, w) {
+  for (.net in aug$nets) {
+    nnSetMeta(.net$id, ctx$nlmBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+    nnSetWeights(.net$id, w[.net$gIdx])
+  }
+  .dw <- .nnFillWeightCols(aug, adata)          # torch weights (= w) -> data columns
+  .parIni <- tryCatch(suppressWarnings(suppressMessages(
+    nlmixr2est::nlmObjectiveSetup(ctx$ui, .dw, ctx$control))), error = function(e) NULL)
+  if (is.null(.parIni)) return(NULL)
+  on.exit(try(nlmixr2est::.nlmFreeEnv(), silent = TRUE), add = TRUE)
+  .nnCapReset(TRUE)
+  .obj <- tryCatch(nlmixr2est::nlmSolveR(.parIni), error = function(e) NA_real_)
+  .cap <- .nnCapGet(); .nnCapReset(FALSE)
+  if (!is.finite(.obj) || is.null(.cap) || !length(.cap$id)) return(NULL)
+  .dLLdf <- .cap$dLLdf[match(ctx$obsKey, .cap$id * 1024L + .cap$k)]
+  if (anyNA(.dLLdf)) return(NULL)
+  list(obj = 2 * .obj, dLLdf = .dLLdf)          # objf = -2LL = 2 * minimum
+}
+
 .nnPopWarmStart <- function(aug, data, idCol, obs, dv, wPlaceholder, thetas, errPar,
-                            w0, est, iters) {
+                            w0, est, iters, exactCtx = NULL) {
   .ad <- data
   for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- 0    # population: eta = 0
   if (errPar$add == 0 && errPar$prop == 0) errPar$add <- 1      # avoid R(f)=0
@@ -323,6 +351,8 @@
   ## objective (-2 log-likelihood) + analytic gradient at the GLOBAL weight vector w
   ## (all networks concatenated in aug$nets order)
   .eval <- function(w) {
+    ## exact per-obs score from the C++ nlm solve when requested (else NULL)
+    .ex <- if (!is.null(exactCtx)) .nnNlmExactCotangent(exactCtx, aug, .ad, w) else NULL
     for (.net in aug$nets) {                                    # split w per net
       nnSetMeta(.net$id, .net$augBase, .net$K, .net$H, .net$act)
       nnSetWeights(.net$id, w[.net$gIdx])
@@ -333,9 +363,15 @@
     .f <- .s[[aug$endpoint]][.ik]
     .resid <- .dvObs - .f
     .R <- errPar$add^2 + (errPar$prop * .f)^2
-    .dRdf <- 2 * errPar$prop^2 * .f
-    .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
-    list(obj = sum(log(2 * pi * .R) + .resid^2 / .R),
+    if (!is.null(.ex)) {                          # exact C++ cotangent + -2LL
+      .dLLdf <- .ex$dLLdf
+      .obj <- .ex$obj
+    } else {                                       # closed-form Gaussian score
+      .dRdf <- 2 * errPar$prop^2 * .f
+      .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
+      .obj <- sum(log(2 * pi * .R) + .resid^2 / .R)
+    }
+    list(obj = .obj,
          grad = -2 * vapply(aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]),
                             numeric(1), USE.NAMES = FALSE))
   }
@@ -559,12 +595,21 @@
   ## rejects), materialization falls back to FOCEi.  This is "run an nlm-family
   ## optimizer without between-subject variability".
   if (.innerEst %in% .nnNlmOptimizers) {
+    .nlmBases <- if (.hasEta) NULL else .nnNlmBase(.ui, .aug)
+    ## cotangent="exact": drive the weight fit's per-obs score through nlmixr2est's
+    ## nlm C++ solve (exact for any prediction-based error model) instead of the
+    ## closed-form Gaussian formula; needs the weight base in the nlm model.  Any
+    ## failure inside falls back to the Gaussian score, so this only ever adds
+    ## precision -- never breaks the fit.
+    .exactCtx <- if (.exact && !is.null(.nlmBases)) {
+      list(ui = .ui, control = .innerCtl, nlmBases = .nlmBases, obsKey = .obsKey)
+    } else NULL
     .wFit <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder, .th0, .errPar0,
-                             .nnAllTorchWeights(.aug), .innerEst, sched$rounds)
+                             .nnAllTorchWeights(.aug), .innerEst, sched$rounds,
+                             exactCtx = .exactCtx)
     .nnSetAllTorchWeights(.aug, .wFit)
     .trained <- stats::setNames(.wFit, .aug$weights)
     .dw <- .nnFillWeightCols(.aug, .data)
-    .nlmBases <- if (.hasEta) NULL else .nnNlmBase(.ui, .aug)
     if (!is.null(.nlmBases)) {
       ## native nlm materialization: the nlm solve reads each network's weights at
       ## its nlm-model base; nlm estimates the residual error at the fixed weights.
