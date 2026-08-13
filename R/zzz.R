@@ -83,6 +83,12 @@
     try(rxode2::rxRemoveUiPrep("nlmixr2nn:rehydrate"), silent = TRUE)
   }
   try(.Call(`_nlmixr2nn_nnUnregisterLoader`), silent = TRUE)
+  ## every registration handed to nlmixr2est must come back before this DLL goes
+  ## away: nlmixr2est cannot tell that we unloaded, so anything left behind is
+  ## called on the next objective evaluation.  The contribution bundle is a raw
+  ## function pointer into this DLL; the outer-network callback is a closure whose
+  ## environment is this (now dead) namespace.
   try(.Call(`_nlmixr2nn_removeContrib`), silent = TRUE)
+  try(nnOuterUnregister(), silent = TRUE)
   library.dynam.unload("nlmixr2nn", libpath)
 }

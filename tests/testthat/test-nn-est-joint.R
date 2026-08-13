@@ -58,7 +58,7 @@ test_that("joint nn training co-optimizes params + weights and recovers MM+IIV",
   expect_equal(length(rxode2::rxForcedPars(f$ui)), nW)
 })
 
-test_that("joint nn training interleaves a variational inner estimator (ADVI iters knob)", {
+test_that("joint nn training interleaves a variational inner estimator (emvi iters knob)", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
@@ -85,12 +85,12 @@ test_that("joint nn training interleaves a variational inner estimator (ADVI ite
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
-  ## joint mode with an ADVI inner: interleave uses the `iters` knob -- each round
+  ## joint mode with a variational (emvi) inner: interleave uses the `iters` knob -- each round
   ## a warm-started partial variational fit (outerPerRound iters, resuming from the
   ## previous round's ui) + a torch weight step, genuinely co-descending.
   f <- suppressWarnings(suppressMessages(
-    nlmixr2est::nlmixr2(modF, nnCovData(data), "advi",
-      nlmixr2est::adviControl(),
+    nlmixr2est::nlmixr2(modF, nnCovData(data), "emvi",
+      nlmixr2est::emviControl(),
       nn = nnControl(mode = "joint", rounds = 6L, outerPerRound = 30L, wSteps = 6L,
                      lr = 0.03, tol = 5e-3, seed = 5L))))
 

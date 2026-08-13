@@ -557,7 +557,7 @@
   ## (imp/impmap/qrpem: hook fires at importance draws; saem: kernel bypasses the
   ## FOCEi inner) get the cotangent from a dedicated FOCEi posthoc at the fit.
   .exactSelf <- .exact && (.innerEst %in% c("focei", "foce", "foi", "fo",
-                                            "laplace", "agq", "advi", "vae"))
+                                            "laplace", "agq", "emvi", "fbvi", "vae"))
   .exactPosthoc <- .exact && !.exactSelf
   ## a non-add()/prop() error model has no closed-form Gaussian cotangent -- its
   ## score must come from the inner fit.
