@@ -416,7 +416,46 @@
 ## The weight VALUES already arrive via rxForcedPars(); only the shapes are
 ## transient.  A no-op during training (the training loop owns the registry and
 ## switches bases between the base and augmented models) and for non-nn models.
+## Flag `ui` as owning the nn par-loader, for a model whose weights come from the
+## LOADER BUFFER.  Two things it must not do:
+##  - claim an unrelated model: the loader would write into its par_ptr, which is
+##    exactly what naming the loader prevents;
+##  - claim a persisted fit: rxCallParLoaders writes forcedPars first and then
+##    lets loaders override, so a ui carrying its trained weights in
+##    rxForcedPars() would have them overwritten by whatever the (transient, and
+##    after a reload empty) loader buffer holds.
+## A no-op on an older rxode2 without rxParLoader().
+.nnClaimParLoader <- function(ui) {
+  if (!("rxParLoader<-" %in% getNamespaceExports("rxode2"))) return(invisible(FALSE))
+  .u <- tryCatch(rxode2::rxUiDecompress(ui), error = function(e) NULL)
+  if (!is.environment(.u)) return(invisible(FALSE))   # compressed: cannot set in place
+  if (identical(tryCatch(rxode2::rxParLoader(.u), error = function(e) NULL),
+                .nnLoaderName)) {
+    return(invisible(TRUE))                           # already claimed
+  }
+  .p <- tryCatch(rxode2::rxModelVars(.u)$params, error = function(e) NULL)
+  .w <- grep("^rxnn(W1|B1|W2|B2)_", .p, value = TRUE)
+  if (length(.w) == 0L) return(invisible(FALSE))      # not an nn model
+  .fp <- tryCatch(rxode2::rxForcedPars(.u), error = function(e) NULL)
+  if (any(.w %in% names(.fp))) return(invisible(FALSE))  # weights ride on the ui
+  tryCatch({
+    rxode2::rxParLoader(.u) <- .nnLoaderName
+    invisible(TRUE)
+  }, error = function(e) invisible(FALSE))
+}
+
 .nnRehydrate <- function(ui) {
+  ## Claim the par-loader for any model that carries nn weight columns, BEFORE
+  ## the training early-return -- during training the loader buffer is exactly
+  ## where the weights live, so a training-time ui solve needs the flag most.
+  ## This has to happen HERE rather than in nnUpdate(): rxSolve.rxUi calls
+  ## .rxApplyParLoader() right after these hooks, and that CLEARS the active
+  ## loader for a model with no flag -- including a name nnWithLoader() just set.
+  ## Without the flag the weights never reach par_ptr and every nn output
+  ## collapses to its all-zero-weight value.  nnUpdate() cannot do it because a
+  ## ui often arrives compressed, so its in-place set would not reach the caller;
+  ## the ui is decompressed by the time a prep hook sees it.
+  .nnClaimParLoader(ui)
   if (isTRUE(.nnEnv$training)) return(invisible())
   .meta <- .nnUiMeta(ui)
   if (is.null(.meta) || length(.meta) == 0L) return(invisible())
