@@ -6,13 +6,16 @@
 ## directly around its internal solves (inner fits + augmented solves) because they
 ## bypass that bridge.  Both no-op gracefully on an older rxode2.
 .nnLoaderName <- "nlmixr2nn:nnParLoader"
+## rxode2's public wrappers rather than .Call()ing its compiled entry points by
+## name: reaching into another package's DLL is not a supported interface and
+## R CMD check flags it.  Both are wrapped because an older rxode2 does not have
+## them, in which case the loader simply never activates -- which is correct, as
+## that rxode2 has no named-loader dispatch either.
 .nnLoaderOn <- function() {
-  tryCatch(.Call("_rxode2_rxSetActiveParLoader", .nnLoaderName, PACKAGE = "rxode2"),
-           error = function(e) NULL)
+  tryCatch(rxode2::rxSetActiveParLoader(.nnLoaderName), error = function(e) NULL)
 }
 .nnLoaderOff <- function() {
-  tryCatch(.Call("_rxode2_rxClearActiveParLoader", PACKAGE = "rxode2"),
-           error = function(e) NULL)
+  tryCatch(rxode2::rxClearActiveParLoader(), error = function(e) NULL)
 }
 
 ## Per-observation error-model cotangent capture (nlmixr2est likelihood-contribution
@@ -198,7 +201,7 @@
     nnSetWeights(.net$id, weights[.net$gIdx])
   }
   if (isTRUE(orig$calcTables)) {
-    fit <- tryCatch(nlmixr2est:::addTable(fit), error = function(e) fit)
+    fit <- tryCatch(nlmixr2est::addTable(fit), error = function(e) fit)
   }
   .cm <- orig$covMethod
   if (!is.null(.cm) && !identical(.cm, "") && grepl("focei?$|^i?focei?", innerEst)) {
@@ -557,9 +560,7 @@
   .origTablesCov <- .nnStashTablesCov(.innerCtl)
   .innerCtl <- .nnDisableTablesCov(.innerCtl)
 
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) stop("nlmixr2nn neural-network training requires the libtorch backend",
-                call. = FALSE)
+  .nnTorchRequire("fitting a model that contains nn()")
 
   ## activate the named nn par-loader for every solve done during training (the
   ## inner fits + augmented solves bypass the rxSolve.rxUi flag bridge); cleared on

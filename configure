@@ -1,0 +1,67 @@
+#!/bin/sh
+# Locate libtorch and write src/Makevars from src/Makevars.in.
+#
+# This exists so src/Makevars does not need $(shell ...), which is a GNU make
+# extension: "Portable Makefiles do not use GNU extensions" (Writing R
+# Extensions).  Discovery belongs in configure, which is allowed to run
+# commands; the Makevars it produces is plain, portable make.
+
+set -e
+
+: "${R_HOME:=$(R RHOME)}"
+RSCRIPT="${R_HOME}/bin/Rscript"
+
+if [ ! -x "${RSCRIPT}" ]; then
+  echo "configure: cannot run ${RSCRIPT}" >&2
+  exit 1
+fi
+
+TORCH_HOME=$("${RSCRIPT}" --vanilla tools/torch-home.R 2>/dev/null || true)
+
+fail() {
+  cat >&2 <<EOF
+
+------------------------------- nlmixr2nn -------------------------------
+$1
+
+nlmixr2nn embeds a neural network in the ODE right-hand side and links the
+libtorch C++ library that the R 'torch' package ships.  Both the R package
+and its libtorch binaries are required to build.
+
+To fix:
+
+    install.packages("torch")
+    torch::install_torch()
+
+then install nlmixr2nn again.  torch::install_torch_sitrep() reports what
+torch thinks is installed and where.
+-------------------------------------------------------------------------
+
+EOF
+  exit 1
+}
+
+if [ -z "${TORCH_HOME}" ]; then
+  fail "The R package 'torch' was not found."
+fi
+
+if [ ! -d "${TORCH_HOME}/include" ]; then
+  fail "Found torch at '${TORCH_HOME}', but no include/ directory there.
+libtorch itself does not appear to be installed."
+fi
+
+# One library is enough to tell a real libtorch tree from an empty one; the
+# extension differs by platform.
+if [ ! -f "${TORCH_HOME}/lib/libtorch.so" ] &&
+   [ ! -f "${TORCH_HOME}/lib/libtorch.dylib" ] &&
+   [ ! -f "${TORCH_HOME}/lib/torch.dll" ]; then
+  fail "Found torch at '${TORCH_HOME}', but no libtorch library in lib/.
+libtorch itself does not appear to be installed."
+fi
+
+echo "nlmixr2nn: using libtorch in ${TORCH_HOME}"
+
+# '|' as the sed delimiter: paths contain '/' but essentially never '|'.
+sed -e "s|@TORCH_HOME@|${TORCH_HOME}|g" src/Makevars.in > src/Makevars
+
+exit 0

@@ -10,7 +10,7 @@
   ## and simulates without nlmixr2est.
   if (requireNamespace("nlmixr2est", quietly = TRUE) &&
       exists(".nlmixr2estLikContribPtrs", envir = asNamespace("nlmixr2est"))) {
-    .p <- try(nlmixr2est:::.nlmixr2estLikContribPtrs(), silent = TRUE)
+    .p <- try(nlmixr2est::.nlmixr2estLikContribPtrs(), silent = TRUE)
     if (!inherits(.p, "try-error")) {
       .Call(`_nlmixr2nn_iniLikContrib`, .p, PACKAGE = "nlmixr2nn")
       .Call(`_nlmixr2nn_registerContrib`, PACKAGE = "nlmixr2nn")
@@ -91,10 +91,8 @@
   try(.Call(`_nlmixr2nn_nnUnregisterLoader`), silent = TRUE)
   ## every registration handed to nlmixr2est must come back before this DLL goes
   ## away: nlmixr2est cannot tell that we unloaded, so anything left behind is
-  ## called on the next objective evaluation.  The contribution bundle is a raw
-  ## function pointer into this DLL; the outer-network callback is a closure whose
-  ## environment is this (now dead) namespace.
+  ## called on the next objective evaluation, into a dead DLL.  The contribution
+  ## bundle is a raw function pointer into this library.
   try(.Call(`_nlmixr2nn_removeContrib`), silent = TRUE)
-  try(nnOuterUnregister(), silent = TRUE)
   library.dynam.unload("nlmixr2nn", libpath)
 }

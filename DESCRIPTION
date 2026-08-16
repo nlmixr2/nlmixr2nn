@@ -10,10 +10,12 @@ Authors@R: person("Matthew", "Fidler", role = c("aut", "cre"),
     email = "matthew.fidler@gmail.com")
 License: GPL (>= 3)
 Encoding: UTF-8
-Imports: rxode2, checkmate, stats, symengine
+Imports: rxode2, checkmate, stats, symengine, torch
 LinkingTo: rxode2, Rcpp, nlmixr2est
-SystemRequirements: libtorch (via the 'torch' R package; C++17)
-Suggests: nlmixr2, nlmixr2est, numDeriv, torch, testthat (>= 3.0.0),
+SystemRequirements: libtorch (via the 'torch' R package; C++17). Both the
+    'torch' package and its libtorch binaries (torch::install_torch()) must be
+    present to build, and libtorch is loaded at run time.
+Suggests: nlmixr2, nlmixr2est, numDeriv, testthat (>= 3.0.0),
     knitr, rmarkdown, minqa, lbfgsb3c, n1qn1, ggplot2, callr, withr
 VignetteBuilder: knitr
 NeedsCompilation: yes

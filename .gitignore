@@ -7,3 +7,5 @@ src/*.so
 src/*.dll
 *.tar.gz
 *.Rcheck
+src/Makevars
+src/Makevars.win

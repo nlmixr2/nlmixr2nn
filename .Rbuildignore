@@ -1,3 +1,8 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
 ^tests/testthat/.*\.rds$
+^src/Makevars$
+^src/Makevars\.win$
+^\.vexp$
+^nlmixr2nn\.Rcheck$
+^.*\.tar\.gz$

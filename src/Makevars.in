@@ -1,0 +1,15 @@
+# Generated from src/Makevars.in by ./configure -- do not edit src/Makevars.
+#
+# Link libtorch (the C++ backend shipped inside the R 'torch' package) directly.
+# Only nnTorch.cpp pulls in torch/torch.h; the hot-path C files stay plain C.
+#
+# The torch location is substituted by configure rather than discovered with
+# $(shell ...), which is a GNU make extension and not portable.
+CXX_STD = CXX17
+
+PKG_CPPFLAGS = -I"@TORCH_HOME@/include" \
+               -I"@TORCH_HOME@/include/torch/csrc/api/include" \
+               -D_GLIBCXX_USE_CXX11_ABI=1
+
+PKG_LIBS = -L"@TORCH_HOME@/lib" -Wl,-rpath,"@TORCH_HOME@/lib" \
+           -ltorch -ltorch_cpu -lc10

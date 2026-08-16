@@ -1,0 +1,50 @@
+#!/bin/sh
+# Windows counterpart of ./configure: writes src/Makevars.win from
+# src/Makevars.win.in.  Rtools provides sh, so this is the same script with the
+# Windows template and the Windows library name.
+
+set -e
+
+: "${R_HOME:=$(R RHOME)}"
+RSCRIPT="${R_HOME}/bin/Rscript"
+
+TORCH_HOME=$("${RSCRIPT}" --vanilla tools/torch-home.R 2>/dev/null || true)
+
+fail() {
+  cat >&2 <<EOF
+
+------------------------------- nlmixr2nn -------------------------------
+$1
+
+nlmixr2nn links the libtorch C++ library that the R 'torch' package ships.
+Both the R package and its libtorch binaries are required to build.
+
+To fix:
+
+    install.packages("torch")
+    torch::install_torch()
+
+then install nlmixr2nn again.
+-------------------------------------------------------------------------
+
+EOF
+  exit 1
+}
+
+if [ -z "${TORCH_HOME}" ]; then
+  fail "The R package 'torch' was not found."
+fi
+
+if [ ! -d "${TORCH_HOME}/include" ]; then
+  fail "Found torch at '${TORCH_HOME}', but no include/ directory there."
+fi
+
+if [ ! -f "${TORCH_HOME}/lib/torch.dll" ] && [ ! -f "${TORCH_HOME}/lib/libtorch.dll" ]; then
+  fail "Found torch at '${TORCH_HOME}', but no torch DLL in lib/."
+fi
+
+echo "nlmixr2nn: using libtorch in ${TORCH_HOME}"
+
+sed -e "s|@TORCH_HOME@|${TORCH_HOME}|g" src/Makevars.win.in > src/Makevars.win
+
+exit 0

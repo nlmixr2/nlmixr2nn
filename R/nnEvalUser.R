@@ -1,3 +1,9 @@
+## `x`, `value` and `group` are columns of the data.frame built inside
+## plot.nlmixr2nnEval() and referenced by ggplot2's aes(), which R CMD check
+## cannot see through.  Declaring them is preferable to the .data pronoun here,
+## which would pull rlang in for a package that only Suggests ggplot2.
+utils::globalVariables(c("x", "value", "group"))
+
 ## Looking at what a network learned.
 ##
 ## After a fit the first question is always "what shape did it find?", and the
