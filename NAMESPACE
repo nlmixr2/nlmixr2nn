@@ -8,6 +8,9 @@ export(nn)
 export(nnControl)
 export(nnEval)
 export(nnWeights)
+export(nnnpars)
+export(nnprobe)
+exportPattern("^nn[0-9]")
 importFrom(rxode2,
   rxD,
   rxRmFun,

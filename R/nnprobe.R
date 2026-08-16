@@ -8,6 +8,7 @@
 #' @param idx zero-based parameter index.
 #' @param x ignored placeholder argument.
 #' @return numeric vector.
+#' @export
 #' @keywords internal
 nnprobe <- function(idx, x = 0) {
   df <- data.frame(idx = idx, x = x)
@@ -15,6 +16,7 @@ nnprobe <- function(idx, x = 0) {
 }
 
 #' @rdname nnprobe
+#' @export
 #' @keywords internal
 nnnpars <- function(x = 0) {
   .Call(`_nlmixr2nn_nnnpars`, as.double(x))

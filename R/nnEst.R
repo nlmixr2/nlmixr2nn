@@ -333,7 +333,11 @@
   if (is.null(.parIni)) return(NULL)
   on.exit(try(nlmixr2est::.nlmFreeEnv(), silent = TRUE), add = TRUE)
   .nnCapReset(TRUE)
-  .obj <- tryCatch(nlmixr2est::nlmSolveR(.parIni), error = function(e) NA_real_)
+  ## `:::` deliberately: nlmSolveR is internal to nlmixr2est.  It was written as
+  ## `::`, which raises "not an exported object" -- and because that error was
+  ## swallowed by the tryCatch below, this whole exact-cotangent path silently
+  ## fell back to the Gaussian score on every call and never once ran.
+  .obj <- tryCatch(nlmixr2est:::nlmSolveR(.parIni), error = function(e) NA_real_)
   .cap <- .nnCapGet(); .nnCapReset(FALSE)
   if (!is.finite(.obj) || is.null(.cap) || !length(.cap$id)) return(NULL)
   .dLLdf <- .cap$dLLdf[match(ctx$obsKey, .cap$id * 1024L + .cap$k)]
@@ -707,14 +711,20 @@
   ## optimizer without between-subject variability".
   if (.innerEst %in% .nnNlmOptimizers) {
     .nlmBases <- if (.hasEta) NULL else .nnNlmBase(.ui, .aug)
-    ## cotangent="exact": drive the weight fit's per-obs score through nlmixr2est's
-    ## nlm C++ solve (exact for any prediction-based error model) instead of the
-    ## closed-form Gaussian formula; needs the weight base in the nlm model.  Any
-    ## failure inside falls back to the Gaussian score, so this only ever adds
-    ## precision -- never breaks the fit.
-    .exactCtx <- if (.exact && !is.null(.nlmBases)) {
-      list(ui = .ui, control = .innerCtl, nlmBases = .nlmBases, obsKey = .obsKey)
-    } else NULL
+    ## The exact per-observation score for this branch would come from
+    ## nlmixr2est's nlm C++ solve via .nnNlmExactCotangent().  It is DISABLED.
+    ##
+    ## That path never actually ran: it called an unexported `nlmSolveR` through
+    ## `::`, and the resulting error was swallowed by a tryCatch that returned
+    ## NA, so every call fell back to the Gaussian score.  Fixing the call
+    ## revealed why that went unnoticed -- setting the objective up and tearing it
+    ## down once per optimizer evaluation double-frees the shared capture store
+    ## (src/nlmixr2nnContrib.c grows one buffer with realloc), which segfaults.
+    ##
+    ## Turning it on is gated on making that store safe.  Until then this branch
+    ## uses the closed-form Gaussian score, and .nnInferSched() refuses an
+    ## endpoint that has no closed form rather than fitting one wrongly.
+    .exactCtx <- NULL
     .wFit <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder, .th0, .errPar0,
                              .nnAllTorchWeights(.aug), .innerEst, sched$rounds,
                              exactCtx = .exactCtx)

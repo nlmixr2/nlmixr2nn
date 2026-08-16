@@ -104,6 +104,16 @@
     warmPopIters = 3L)
 
   if (.isNlm) {
+    ## The population branch has only the closed-form Gaussian score available
+    ## (its exact path is disabled -- see .nnRun).  Refuse an endpoint that has
+    ## no closed form rather than fit it with a score that does not apply to it.
+    if (!.ep$closedForm) {
+      stop("est=\"", .est, "\" (population, no random effects) currently supports ",
+           "only an untransformed additive/proportional normal endpoint; this ",
+           "model's endpoint is '", .ep$transform, "' with errType '", .ep$errType,
+           "'.  Fit it with a mixed-effects estimator such as \"focei\", which ",
+           "can use the exact per-observation score.", call. = FALSE)
+    }
     ## population weight fit: `rounds` is the optimizer's iteration cap, so it
     ## scales with the number of parameters being optimized
     .s$rounds <- if (is.na(nW)) 200L else .nnClamp(5L * nW, 50L, 500L)

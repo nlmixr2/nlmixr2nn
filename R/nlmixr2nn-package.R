@@ -10,14 +10,20 @@
 #' [nnControl()] to steer training, and [nnEval()]/[nnWeights()] to inspect what
 #' a network learned.
 #'
-#' The generated `nn<K>()` / `nnWg<K>()` evaluator family is NOT exported.
-#' Compiled model code reaches it through `R_RegisterCCallable()` (see
-#' `src/init.c`), not through the R namespace, so exporting it would only put
-#' three dozen machine-facing names in front of users.
+#' The generated `nn<K>()` evaluator family and its derivatives ARE exported,
+#' and must be.  Compiled model code reaches them through
+#' `R_RegisterCCallable()`, but rxode2's symengine renderer resolves a model
+#' function by NAME with `get(fun, ...)` over the search path when it builds
+#' derivatives, so an unexported `nn1` fails with "function 'nn1' or its
+#' derivatives are not supported in rxode2" the moment a model needs a Jacobian.
+#' They are machine-facing rather than user-facing, hence `@keywords internal`.
+#' (`nnWg<K>()` is deliberately not exported: it only ever appears in generated
+#' model text handed to C, never through the symengine path.)
 #'
 #' @useDynLib nlmixr2nn, .registration = TRUE
 #' @importFrom rxode2 rxD rxRmFun rxUdfUi rxUdfUiIniDf rxUdfUiNum
 #' @importFrom rxode2 rxode2parseAssignTranslation rxode2parseGetTranslation
 #' @importFrom stats rnorm
+#' @rawNamespace exportPattern("^nn[0-9]")
 #' @keywords internal
 "_PACKAGE"

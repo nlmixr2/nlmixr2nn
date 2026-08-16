@@ -10,7 +10,7 @@ Authors@R: person("Matthew", "Fidler", role = c("aut", "cre"),
     email = "matthew.fidler@gmail.com")
 License: GPL (>= 3)
 Encoding: UTF-8
-Imports: rxode2, checkmate, stats
+Imports: rxode2, checkmate, stats, symengine
 LinkingTo: rxode2, Rcpp, nlmixr2est
 SystemRequirements: libtorch (via the 'torch' R package; C++17)
 Suggests: nlmixr2, nlmixr2est, numDeriv, torch, testthat (>= 3.0.0),
