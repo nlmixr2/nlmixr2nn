@@ -44,7 +44,7 @@
 #' @param H hidden width.
 #' @param act activation: one of "relu", "softplus", "tanh".
 #' @return invisibly TRUE.
-#' @export
+#' @keywords internal
 nnSetMeta <- function(id, base, K, H, act = "relu") {
   act <- match.arg(tolower(act), names(.nnActCode))
   invisible(.Call(`_nlmixr2nn_nnSetMeta`, as.integer(id), as.integer(base),
@@ -53,7 +53,7 @@ nnSetMeta <- function(id, base, K, H, act = "relu") {
 
 #' Clear all registered network layouts
 #' @return invisibly TRUE.
-#' @export
+#' @keywords internal
 nnClearMeta <- function() {
   invisible(.Call(`_nlmixr2nn_nnClearMeta`))
 }
@@ -67,7 +67,7 @@ nnClearMeta <- function() {
 #' @param id integer network id.
 #' @param values numeric weight vector of length `H*K + 2*H + 1`.
 #' @return invisibly TRUE.
-#' @export
+#' @keywords internal
 nnSetWeights <- function(id, values) {
   invisible(.Call(`_nlmixr2nn_nnSetWeights`, as.integer(id), as.double(values)))
 }
@@ -82,7 +82,7 @@ nnSetWeights <- function(id, values) {
 #' @param id integer network id (must be registered via [nnSetMeta()]).
 #' @param x numeric input vector of length K.
 #' @return numeric vector of length `H*K + 2*H + 1`.
-#' @export
+#' @keywords internal
 nnWeightGrad <- function(id, x) {
   .Call(`_nlmixr2nn_nnWeightGrad`, as.integer(id), as.double(x))
 }
@@ -97,7 +97,7 @@ nnWeightGrad <- function(id, x) {
 #' @param K input dimension.
 #' @param H hidden width.
 #' @return character vector of length `H*K + 2*H + 1`.
-#' @export
+#' @keywords internal
 nnWeightLayout <- function(id, K, H) {
   ## rx-prefixed so users recognize them as internal (loader/hook-owned) covariates
   w1 <- as.vector(t(outer(seq_len(H), seq_len(K),

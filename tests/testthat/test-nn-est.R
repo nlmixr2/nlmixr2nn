@@ -15,10 +15,9 @@
 test_that("iterative nn training recovers the population NN shape + IIV and is self-contained", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1)
@@ -34,7 +33,6 @@ test_that("iterative nn training recovers the population NN shape + IIV and is s
                amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr + rnorm(nrow(s), 0, 0.1)))
   }))
 
-  nnClearMeta()
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
     model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
@@ -73,10 +71,9 @@ test_that("iterative nn training recovers the population NN shape + IIV and is s
 test_that("iterative nn training injects NN input covariates (covariate-NN)", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   ## elimination rate depends on a covariate WT (exp(0.5*WT)) with IIV; the NN
@@ -94,7 +91,6 @@ test_that("iterative nn training injects NN input covariates (covariate-NN)", {
                dv = c(NA, s$central + rnorm(nrow(s), 0, 0.1)))
   }))
 
-  nnClearMeta()
   modC <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.1 })
     model({ cl <- exp(nn(WT, eta.nn))           # NN input is the covariate WT
@@ -126,10 +122,9 @@ test_that("iterative nn training injects NN input covariates (covariate-NN)", {
 test_that("iterative nn training goes through an lhs endpoint (pred is a function of a state)", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1); ns <- 8L; etaTrue <- rnorm(ns, 0, sqrt(0.15))
@@ -144,7 +139,6 @@ test_that("iterative nn training goes through an lhs endpoint (pred is a functio
                amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr / 2 + rnorm(nrow(s), 0, 0.05)))
   }))
 
-  nnClearMeta()
   modL <- function() {
     ini({ add.sd <- 0.2; eta.nn ~ 0.2 })
     model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
@@ -179,10 +173,9 @@ test_that("iterative nn training goes through an lhs endpoint (pred is a functio
 test_that("iterative nn training works under a proportional error model", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1); ns <- 8L; etaTrue <- rnorm(ns, 0, sqrt(0.15))
@@ -197,7 +190,6 @@ test_that("iterative nn training works under a proportional error model", {
                amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr * (1 + rnorm(nrow(s), 0, 0.1))))
   }))
 
-  nnClearMeta()
   modP <- function() {
     ini({ prop.sd <- 0.3; eta.nn ~ 0.2 })
     model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
@@ -221,10 +213,9 @@ test_that("iterative nn training works under a proportional error model", {
 test_that("iterative nn training works with a SAEM inner estimator", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1); ns <- 8L; etaTrue <- rnorm(ns, 0, sqrt(0.15))
@@ -238,7 +229,6 @@ test_that("iterative nn training works with a SAEM inner estimator", {
                amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr + rnorm(nrow(s), 0, 0.1)))
   }))
 
-  nnClearMeta()
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
     model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")

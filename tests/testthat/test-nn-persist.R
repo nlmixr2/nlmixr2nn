@@ -7,10 +7,9 @@
 test_that("a fit persists nn weights + shapes and rehydrates them on solve", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1); ns <- 6L; etaTrue <- rnorm(ns, 0, sqrt(0.15))
@@ -29,7 +28,6 @@ test_that("a fit persists nn weights + shapes and rehydrates them on solve", {
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
-  nnClearMeta()
   fit <- suppressWarnings(suppressMessages(
     nlmixr2est::nlmixr2(modF, nnCovData(data), "focei",
       nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 3L,
@@ -54,7 +52,6 @@ test_that("a fit persists nn weights + shapes and rehydrates them on solve", {
   expect_false(anyNA(ref))
 
   ## emulate a fresh session: forget the transient C + R registries
-  nnClearMeta()
   .nnEnv <- get(".nnEnv", envir = asNamespace("nlmixr2nn"))
   .savedReg <- .nnEnv$reg
   assign("reg", list(), envir = .nnEnv)
@@ -70,8 +67,12 @@ test_that("a fit persists nn weights + shapes and rehydrates them on solve", {
   ## negative control: without the hook and with a cold registry, nn() cannot
   ## stride the weight block, so the solve is all NA -- proving the hook does the
   ## essential rehydration (forcedPars alone is not enough).
-  nnClearMeta()
+  ## nnClearMeta() here is not isolation boilerplate -- it is how this negative
+  ## control is CONSTRUCTED.  The C registry still holds the binding the previous
+  ## solve installed, so without clearing it the network can still stride its
+  ## weights and the control proves nothing.
   assign("reg", list(), envir = .nnEnv)
+  nnClearMeta()
   rxode2::rxRemoveUiPrep("nlmixr2nn:rehydrate")
   on.exit(rxode2::rxRegisterUiPrep("nlmixr2nn:rehydrate",
             get(".nnRehydrate", envir = asNamespace("nlmixr2nn"))), add = TRUE)

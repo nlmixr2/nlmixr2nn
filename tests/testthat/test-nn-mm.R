@@ -9,8 +9,7 @@ test_that("nnTrain recovers a Michaelis-Menten rate (nonlinear NN-ODE, torch gra
   skip_on_cran()
   skip_if_not_installed("rxode2")
   .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
 
   set.seed(1)

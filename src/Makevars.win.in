@@ -1,0 +1,12 @@
+# Generated from src/Makevars.win.in by ./configure.win -- do not edit
+# src/Makevars.win.
+#
+# As Makevars.in, minus -rpath: Windows resolves the torch DLLs through the
+# loader path rather than an embedded run path, and the R 'torch' package puts
+# them on it when its namespace loads.
+CXX_STD = CXX17
+
+PKG_CPPFLAGS = -I"@TORCH_HOME@/include" \
+               -I"@TORCH_HOME@/include/torch/csrc/api/include"
+
+PKG_LIBS = -L"@TORCH_HOME@/lib" -ltorch -ltorch_cpu -lc10

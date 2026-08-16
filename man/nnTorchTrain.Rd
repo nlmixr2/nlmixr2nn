@@ -28,3 +28,4 @@ the batch, using the cotangent `G = y - target` -> [nnTorchBackward()] ->
 [nnTorchStep()].  This exercises the same VJP path the likelihood-contribution
 gradient bridge will use (there the cotangent comes from the adjoint sweep).
 }
+\keyword{internal}

@@ -7,12 +7,10 @@
 test_that("an eta-free nn() model assembles and trains under FOCEI (population UDE)", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
-  nnClearMeta()
 
   set.seed(1)
   d <- do.call(rbind, lapply(1:6, function(id) {
@@ -47,10 +45,9 @@ test_that("an eta-free nn() model assembles and trains under FOCEI (population U
 test_that("a QSP no-BSV NN model fits with the nlm family (population weight fit)", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   ## QSP: ONE true system (no between-subject variability), noisy observations.
@@ -83,7 +80,6 @@ test_that("a QSP no-BSV NN model fits with the nlm family (population weight fit
   ## rxForcedPars, its solved trajectory reproduces the true (concentration-
   ## dependent, non-degenerate) dynamics.
   for (est in c("nlm", "bobyqa")) {
-    nnClearMeta()
     f <- suppressWarnings(suppressMessages(
       nlmixr2est::nlmixr2(modQSP, nnCovData(data), est,
         nlmixr2est::getValidNlmixrControl(NULL, est),
@@ -105,10 +101,9 @@ test_that("a QSP no-BSV NN model fits with the nlm family (population weight fit
 test_that("multiple nn() networks in one model train jointly", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE); try(nnTorchFree(1L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE); try(nnTorchFree(1L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   ## a two-compartment system with TWO networks: ka = f(WT), cl = f(AGE); no BSV
@@ -125,7 +120,6 @@ test_that("multiple nn() networks in one model train jointly", {
                dv = c(NA, s$central + rnorm(nrow(s), 0, 0.1)))
   }))
 
-  nnClearMeta()
   mod2 <- function() {
     ini({ add.sd <- 0.3 })
     model({ ka <- exp(nn(WT, n_hidden = 3L, act = "tanh"))    # network 0: WT -> ka
@@ -153,10 +147,9 @@ test_that("multiple nn() networks in one model train jointly", {
 test_that("a K=3 covariate network (QSP, no BSV) fits and reproduces the truth", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1); ns <- 8L
@@ -172,7 +165,6 @@ test_that("a K=3 covariate network (QSP, no BSV) fits and reproduces the truth",
                dv = c(NA, s$central + rnorm(nrow(s), 0, 0.1)))
   }))
 
-  nnClearMeta()
   mod3 <- function() {
     ini({ add.sd <- 0.3 })
     model({ cl <- exp(nn(WT, AGE, SEX, n_hidden = 4L, act = "tanh"))   # K = 3 inputs

@@ -15,3 +15,4 @@ invisibly, the number of weights synced.
 \description{
 Push a torch module's weights into the loader buffer (C path, no R round-trip)
 }
+\keyword{internal}

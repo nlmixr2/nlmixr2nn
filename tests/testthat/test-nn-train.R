@@ -3,12 +3,6 @@
 ## bridge the likelihood contribution will use (there the cotangent comes from
 ## the adjoint sweep); here we drive it with an explicit L2 cotangent.
 
-skip_if_no_torch <- function() {
-  skip_if_not_installed("nlmixr2nn")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
-}
-
 test_that("VJP gradient matches finite differences of the loss", {
   skip_if_no_torch()
   id <- 0L; K <- 1L; H <- 6L

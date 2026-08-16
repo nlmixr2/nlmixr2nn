@@ -17,3 +17,4 @@ invisibly NULL.
 \description{
 Load flat weights into a torch module
 }
+\keyword{internal}

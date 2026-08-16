@@ -27,3 +27,4 @@ contiguous block of the solve parameter vector.  This records, for network
 `id`, where that block starts (`base`, zero-based index into
 `rxode2::rxModelVars(model)$params`) and the network dimensions.
 }
+\keyword{internal}

@@ -49,3 +49,4 @@ list(weights, sigma, ll, llTrace).
 \description{
 Fit an embedded neural network in an ODE by forward-sensitivity + torch
 }
+\keyword{internal}

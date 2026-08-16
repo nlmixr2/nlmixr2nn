@@ -12,10 +12,9 @@
 test_that("joint nn training co-optimizes params + weights and recovers MM+IIV", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1); ns <- 8L; etaTrue <- rnorm(ns, 0, sqrt(0.15))
@@ -29,7 +28,6 @@ test_that("joint nn training co-optimizes params + weights and recovers MM+IIV",
                amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr + rnorm(nrow(s), 0, 0.1)))
   }))
 
-  nnClearMeta()
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
     model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
@@ -61,10 +59,9 @@ test_that("joint nn training co-optimizes params + weights and recovers MM+IIV",
 test_that("joint nn training interleaves a variational inner estimator (emvi iters knob)", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1); ns <- 8L; etaTrue <- rnorm(ns, 0, sqrt(0.15))
@@ -78,7 +75,6 @@ test_that("joint nn training interleaves a variational inner estimator (emvi ite
                amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr + rnorm(nrow(s), 0, 0.1)))
   }))
 
-  nnClearMeta()
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
     model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
@@ -105,10 +101,9 @@ test_that("joint nn training interleaves a variational inner estimator (emvi ite
 test_that("nn training warm-starts from a model that already carries trained weights", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1); ns <- 8L; etaTrue <- rnorm(ns, 0, sqrt(0.15))
@@ -122,7 +117,6 @@ test_that("nn training warm-starts from a model that already carries trained wei
                amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr + rnorm(nrow(s), 0, 0.1)))
   }))
 
-  nnClearMeta()
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
     model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
@@ -148,7 +142,6 @@ test_that("nn training warm-starts from a model that already carries trained wei
   expect_equal(unname(wExisting), unname(w1), tolerance = 1e-8)
 
   ## a follow-on fit converges (does not regress) from the warm start
-  nnClearMeta()
   f2 <- suppressWarnings(suppressMessages(
     nlmixr2est::nlmixr2(warmUi, nnCovData(data), "focei",
       nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 4L,
@@ -161,10 +154,9 @@ test_that("nn training warm-starts from a model that already carries trained wei
 test_that("nlm-bridge population warm-start seeds the joint fit with a better start", {
   skip_on_cran()
   skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
-  on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
+  on.exit({ try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   rxode2::setRxThreads(1L)
 
   set.seed(1); ns <- 8L; etaTrue <- rnorm(ns, 0, sqrt(0.15))
@@ -185,7 +177,6 @@ test_that("nlm-bridge population warm-start seeds the joint fit with a better st
             centr ~ add(add.sd) })
   }
   runWs <- function(ws) {
-    nnClearMeta()
     f <- suppressWarnings(suppressMessages(
       nlmixr2est::nlmixr2(modF, nnCovData(data), "focei",
         nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 6L,

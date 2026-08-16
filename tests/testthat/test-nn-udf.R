@@ -38,33 +38,39 @@ test_that("nnUpdate resolves a contiguous base from the solve parameter order", 
   expect_equal(info$K, 1L); expect_equal(info$H, 4L)
 })
 
-test_that("par-loader hook injects buffer weights into par_ptr each solve", {
+test_that("a model's own weights drive the solve, and a stale buffer cannot override them", {
   skip_if_not_installed("rxode2")
-  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   set.seed(11)
   mod <- function() {
     ini({ p <- 1 })
     model({ y <- nn(x, n_hidden = 4, act = "softplus"); d/dt(A) <- -p * A })
   }
-  ui <- rxode2::rxode2(mod)
-  nnUpdate(ui)
+  ui <- suppressMessages(rxode2::rxode2(mod))
   on.exit(nnClearMeta(), add = TRUE)
   H <- 4L
   sp <- function(z) ifelse(z > 0, z + log1p(exp(-z)), log1p(exp(z)))
   refF <- function(w, x) {
-    W1 <- matrix(w[1:H], H, 1); b1 <- w[(H+1):(2*H)]
-    W2 <- matrix(w[(2*H+1):(3*H)], 1, H); b2 <- w[3*H+1]
+    W1 <- matrix(w[1:H], H, 1); b1 <- w[(H + 1):(2 * H)]
+    W2 <- matrix(w[(2 * H + 1):(3 * H)], 1, H); b2 <- w[3 * H + 1]
     as.numeric(W2 %*% sp(W1 * x + b1) + b2)
   }
-  ## weights are covariates: add the placeholder columns (loader overwrites them)
-  ev <- nnCovData(data.frame(id = 1, time = 0, x = 0.5, amt = 0, evid = 0))
+  ## no nnCovData(): a weight covariate is supplied by the model, not the data
+  ev <- data.frame(id = 1, time = 0, x = 0.5, amt = 0, evid = 0)
   solveY <- function() rxode2::rxSolve(ui, ev, returnType = "data.frame",
                                        covsInterpolation = "locf")$y[1]
 
-  ## the loader injects the buffer weights, so the solve matches the reference MLP
-  set.seed(999); w2 <- rnorm(3 * H + 1, sd = 0.3)
-  nnSetWeights(0, w2)
-  expect_equal(solveY(), refF(w2, 0.5), tolerance = 1e-8)
+  ## the compiled evaluator reproduces an independent R MLP at the model's own
+  ## parse-time weights
+  w <- unname(nnWeights(ui))
+  expect_equal(solveY(), refF(w, 0.5), tolerance = 1e-8)
+
+  ## and a leftover loader buffer holding DIFFERENT weights does not change that.
+  ## This is the protection that keeps a reloaded fit correct: in a fresh session
+  ## the transient buffer is empty, and letting it win would zero the network.
+  set.seed(999); other <- stats::rnorm(3 * H + 1, sd = 0.3)
+  nnSetWeights(0, other)
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)
+  expect_equal(solveY(), refF(w, 0.5), tolerance = 1e-8)
 })
 
 test_that("nn() accepts 1 to 4 inputs and rejects more", {

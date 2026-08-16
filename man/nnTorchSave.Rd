@@ -20,3 +20,4 @@ invisibly NULL.
 \description{
 Save / load a trained torch module to a binary
 }
+\keyword{internal}

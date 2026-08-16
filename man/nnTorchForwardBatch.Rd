@@ -17,3 +17,4 @@ numeric vector of length `N`.
 \description{
 Batch forward pass of a torch module
 }
+\keyword{internal}

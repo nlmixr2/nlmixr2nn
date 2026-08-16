@@ -24,3 +24,4 @@ variational states are indexed by a GLOBAL weight index across all networks
 keeps the original `rx_sw_<state>_<j>_` layout; `rx_drdg_<state>_` gains a
 `<id>_` suffix only when more than one network is present.
 }
+\keyword{internal}

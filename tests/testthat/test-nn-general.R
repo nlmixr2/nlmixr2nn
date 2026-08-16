@@ -100,8 +100,7 @@ test_that("GELU and SiLU compiled derivatives match analytic (via nn1)", {
 })
 
 test_that("torch module matches the compiled forward for gelu/silu", {
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   for (act in c("gelu", "silu")) {
     id <- 0L; K <- 2L; H <- 4L
     nnTorchInit(id, K, H, act = act, seed = 8)

@@ -64,7 +64,7 @@
 #' @return augmented model text (character scalar): the base model, `rx_drdg_*`
 #'   outputs (dR/dg per state per network), and the `rx_sw_<state>_<globalj>_`
 #'   variational states whose RHS is the F_X.s block plus the per-network forcing.
-#' @export
+#' @keywords internal
 nnAugmentModel <- function(modelText, H) {
   .calls <- .nnParseCallAll(modelText)
   .multi <- length(.calls) > 1L

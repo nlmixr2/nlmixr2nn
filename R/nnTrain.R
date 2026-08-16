@@ -34,7 +34,7 @@
 #' @param sigma initial residual SD; `estSigma` profiles it by MLE each iteration.
 #' @param seed optional torch init seed; `verbose` prints the LL trace.
 #' @return list(weights, sigma, ll, llTrace).
-#' @export
+#' @keywords internal
 nnTrain <- function(model, data, pred, nnId = 0L, K, H, act = "tanh",
                     params = numeric(0), inits = numeric(0),
                     optimizer = "adam", lr = 0.05, iter = 50,
@@ -48,7 +48,7 @@ nnTrain <- function(model, data, pred, nnId = 0L, K, H, act = "tanh",
   nnTorchOptInit(nnId, optimizer, lr)
   mAug <- rxode2::rxode2(nnAugmentModel(model, H = H))
 
-  p <- c(params, setNames(rep(0, nW), wnm))          # weight placeholders (loader overwrites)
+  p <- c(params, stats::setNames(rep(0, nW), wnm))          # weight placeholders (loader overwrites)
   obs <- data[is.na(data$evid) | data$evid == 0, , drop = FALSE]
   obs <- obs[!is.na(obs$dv), , drop = FALSE]
   swCols <- sprintf("rx_sw_%s_%d_", pred, seq_len(nW) - 1L)
@@ -59,7 +59,7 @@ nnTrain <- function(model, data, pred, nnId = 0L, K, H, act = "tanh",
     ik <- match(paste(obs$id, obs$time), paste(s$id, s$time))
     s[ik, , drop = FALSE]
   }
-  logLik <- function(f, sig) sum(dnorm(obs$dv, f, sig, log = TRUE))
+  logLik <- function(f, sig) sum(stats::dnorm(obs$dv, f, sig, log = TRUE))
 
   llTrace <- numeric(iter)
   for (it in seq_len(iter)) {

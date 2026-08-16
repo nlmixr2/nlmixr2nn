@@ -15,3 +15,4 @@ invisibly NULL.
 \description{
 Free a torch module
 }
+\keyword{internal}

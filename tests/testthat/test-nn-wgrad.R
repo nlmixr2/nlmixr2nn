@@ -4,8 +4,7 @@
 ## autograd (a backward pass with unit cotangent yields d(output)/d(w)).
 
 test_that("analytic nnWeightGrad matches torch autograd across activations/K", {
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   code <- c(relu = 0L, softplus = 1L, tanh = 2L, gelu = 3L, silu = 4L)
   for (act in c("softplus", "tanh", "gelu", "silu")) {
     for (K in c(1L, 2L, 3L)) {

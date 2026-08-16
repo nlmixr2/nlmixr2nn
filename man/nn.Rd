@@ -7,8 +7,10 @@
 nn(
   ...,
   n_hidden = 5L,
-  act = c("relu", "softplus", "tanh", "gelu", "silu"),
-  sd = 0.1,
+  act = c("softplus", "tanh", "relu", "gelu", "silu"),
+  init = c("ude", "torch", "normal"),
+  initSd = 0.1,
+  seed = NULL,
   num = NULL,
   iniDf = NULL
 )
@@ -19,9 +21,22 @@ positionally, e.g. `nn(central, t)`).}
 
 \item{n_hidden}{hidden-layer width (default 5).}
 
-\item{act}{activation, one of "relu", "softplus", "tanh".}
+\item{act}{activation, one of "softplus" (default), "tanh", "relu", "gelu" or
+"silu".  The default is smooth with a nonzero second derivative, which
+matters because the model's Jacobian and the FOCEi sensitivities are both
+chained through it; "relu" has a kink and a zero second derivative.}
 
-\item{sd}{standard deviation of the random weight initialization.}
+\item{init}{weight initialization: `"ude"` (default) draws fan-in scaled
+weights with zero biases and a shrunk output layer, so an untrained network
+is a small perturbation of the mechanistic model; `"torch"` reproduces
+libtorch's `nn::Linear` default; `"normal"` is a flat `N(0, initSd)`.}
+
+\item{initSd}{scale of the initialization: the output-layer standard
+deviation for `init = "ude"`, and the standard deviation of every weight
+for `init = "normal"`.}
+
+\item{seed}{optional integer pinning THIS network's initial weights
+regardless of the ambient seed.  Normally unnecessary -- use `set.seed()`.}
 
 \item{num}{network occurrence number; queried via `rxUdfUiNum()` if `NULL`.}
 
@@ -29,7 +44,7 @@ positionally, e.g. `nn(central, t)`).}
 `NULL`.}
 }
 \value{
-a list consumed by [rxode2::rxUdfUi()] (`replace`, `before`, `iniDf`).
+a list consumed by [rxode2::rxUdfUi()] (`replace`, `before`).
 }
 \description{
 Use `nn(state, ..., n_hidden=, act=)` inside a model to insert a
@@ -45,4 +60,10 @@ population network, e.g. `g <- nn(central, eta.latent)` with
 (visible) nlmixr2 random effect, its inner FOCEi sensitivity `d(g)/d(eta)` is
 the network's analytic input derivative -- exact, no finite differences -- and
 it is far more identifiable than a random effect on every weight.
+
+The network's initial weights are drawn WHEN THE MODEL IS PARSED, using R's
+random number generator, and are carried on the model itself.  So
+`set.seed(1)` makes a network reproducible across sessions, and a freshly
+parsed model is immediately solvable -- no torch module and no setup call.
+Drawing a network's weights does not disturb the caller's random stream.
 }

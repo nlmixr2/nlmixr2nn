@@ -22,3 +22,4 @@ invisibly NULL.
 \description{
 Create an optimizer for a torch module
 }
+\keyword{internal}

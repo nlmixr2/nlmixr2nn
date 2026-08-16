@@ -23,3 +23,4 @@ invisibly, the id.
 \description{
 Create a C++ torch module for a network
 }
+\keyword{internal}

@@ -18,3 +18,4 @@ The `nn()` UDF declares each network's weights as covariates; this adds a
 overwrites these slots with the network weights on every solve, so the
 placeholder value is irrelevant.
 }
+\keyword{internal}

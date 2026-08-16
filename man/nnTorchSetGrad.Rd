@@ -19,3 +19,4 @@ Injects an externally computed gradient (e.g. the analytic dLoss/dw from the
 ODE forward sensitivity) into the torch parameters' `.grad`, to be applied by
 the next [nnTorchStep()].
 }
+\keyword{internal}

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Remove what configure generated, so a source tree can be rebuilt cleanly.
+rm -f src/Makevars src/Makevars.win
+exit 0

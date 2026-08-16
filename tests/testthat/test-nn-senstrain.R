@@ -7,8 +7,7 @@
 test_that("forward-sensitivity gradient + torch step increases the log-likelihood", {
   skip_if_not_installed("rxode2")
   .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
 
   K <- 2L; H <- 1L; nW <- H * K + 2 * H + 1
   nnClearMeta(); nnSetMeta(0L, base = 0L, K = K, H = H, act = "tanh")
