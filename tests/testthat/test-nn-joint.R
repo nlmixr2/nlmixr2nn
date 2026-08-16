@@ -11,8 +11,7 @@ test_that("alternating torch-weights + FOCEi-latent-Omega recovers population + 
   skip_on_cran()
   skip_if_not_installed("rxode2")
   .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
   .old <- rxode2::getRxThreads(); on.exit(rxode2::setRxThreads(.old), add = TRUE)
   on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   ## this test drives its OWN manual block-coordinate loop (plain fixed-weight FOCEi

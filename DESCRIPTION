@@ -14,8 +14,8 @@ Imports: rxode2, checkmate, stats
 LinkingTo: rxode2, Rcpp, nlmixr2est
 SystemRequirements: libtorch (via the 'torch' R package; C++17)
 Suggests: nlmixr2, nlmixr2est, numDeriv, torch, testthat (>= 3.0.0),
-    knitr, rmarkdown, minqa, lbfgsb3c, n1qn1
+    knitr, rmarkdown, minqa, lbfgsb3c, n1qn1, ggplot2, callr, withr
 VignetteBuilder: knitr
 NeedsCompilation: yes
 Config/testthat/edition: 3
-Config/roxygen2/version: 8.0.0
+Config/roxygen2/version: 8.1.0

@@ -15,3 +15,4 @@ numeric vector.
 \description{
 Flat weights of a torch module (nnWeightLayout order)
 }
+\keyword{internal}

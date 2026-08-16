@@ -20,3 +20,4 @@ Returns d(output)/d(w) in `nnWeightLayout()` order for the registered network
 plain C (thread-safe); this is the `d(g)/d(w)` forcing factor for the
 forward-sensitivity variational states of the NN weights.
 }
+\keyword{internal}

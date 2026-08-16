@@ -1,30 +1,33 @@
-## torch backend: the C++ libtorch MLP module is the weight source; its weights
-## reach the solve through nnUpdate -> loader hook -> par_ptr -> nn<K>.  The
-## definitive check is that the ODE solve's network output equals the module's
-## own forward pass.  Also covers weight get/set and save/load round-trips.
+## torch backend: the C++ libtorch MLP module is the training optimizer, and it
+## is loaded FROM the model's weights rather than generating its own -- that is
+## what makes a fit reproducible under a single set.seed().
+##
+## The invariant worth pinning is therefore that the compiled evaluator the ODE
+## integrates and the torch module agree ON THE SAME WEIGHTS.  (This used to be
+## written the other way round: the module was the weight source and reached the
+## solve through nnUpdate -> loader -> par_ptr.  A model now carries its own
+## weights and they deliberately outrank anything an external buffer holds, so
+## that phrasing no longer describes the design.)
 
-skip_if_no_torch <- function() {
-  skip_if_not_installed("rxode2")
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
-}
-
-test_that("torch module drives the ODE solve (solve == module forward)", {
+test_that("the torch module and the ODE solve agree on the model's weights", {
   skip_if_no_torch()
-  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)  # nn par-loader active for direct nn-model solves
   mod <- function() {
     ini({ p <- 1 })
     model({ y <- nn(x, n_hidden = 5, act = "softplus"); d/dt(A) <- -p * A })
   }
-  ui <- rxode2::rxode2(mod)
-  nnTorchModel(ui, seed = 1)          # create C++ torch module for network 0
-  on.exit({ nnTorchFree(0); nnClearMeta() }, add = TRUE)
-  nnUpdate(ui)                        # sync module weights into the loader buffer
+  set.seed(1)
+  ui <- suppressMessages(rxode2::rxode2(mod))
+  meta <- rxode2::rxUiDecompress(ui)$nnMeta[["0"]]
 
+  ## load the module from the model, exactly as a fit does
+  nnTorchInit(0, meta$K, meta$H, act = meta$act)
+  on.exit({ try(nnTorchFree(0), silent = TRUE); nnClearMeta() }, add = TRUE)
+  nnTorchSetWeights(0, unname(nnWeights(ui)))
+
+  ## no loader, no nnUpdate, no nnCovData: the model carries its own weights
   xs <- c(-1.5, -0.2, 0.4, 1.1, 3.0)
   ev <- do.call(rbind, lapply(seq_along(xs), function(i)
     data.frame(id = i, time = 0, x = xs[i], amt = 0, evid = 0)))
-  ev <- nnCovData(ev)   # weights are covariates (loader overwrites the placeholders)
   s <- rxode2::rxSolve(ui, ev, returnType = "data.frame", covsInterpolation = "locf")
   for (i in seq_along(xs)) {
     expect_equal(s$y[s$id == i][1], nnTorchForward(0, xs[i]), tolerance = 1e-10)

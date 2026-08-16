@@ -15,3 +15,4 @@ numeric vector.
 \description{
 Flattened parameter gradients (nnWeightLayout order)
 }
+\keyword{internal}

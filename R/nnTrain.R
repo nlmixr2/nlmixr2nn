@@ -34,7 +34,7 @@
 #' @param sigma initial residual SD; `estSigma` profiles it by MLE each iteration.
 #' @param seed optional torch init seed; `verbose` prints the LL trace.
 #' @return list(weights, sigma, ll, llTrace).
-#' @export
+#' @keywords internal
 nnTrain <- function(model, data, pred, nnId = 0L, K, H, act = "tanh",
                     params = numeric(0), inits = numeric(0),
                     optimizer = "adam", lr = 0.05, iter = 50,

@@ -24,3 +24,4 @@ invisibly NULL.  Installs the callback via nlmixr2est.
 \description{
 Register the outer-problem NN training step with a FOCEI fit
 }
+\keyword{internal}

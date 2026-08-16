@@ -13,7 +13,7 @@
 #' @param act activation ("relu", "softplus", "tanh").
 #' @param seed optional integer seed for weight initialization.
 #' @return invisibly, the id.
-#' @export
+#' @keywords internal
 nnTorchInit <- function(id, K, H, act = "relu", seed = NULL) {
   act <- match.arg(tolower(act), names(.nnActCode))
   .Call(`_nlmixr2nn_nnTorchInit`, as.integer(id), as.integer(K), as.integer(H),
@@ -25,20 +25,20 @@ nnTorchInit <- function(id, K, H, act = "relu", seed = NULL) {
 #' Push a torch module's weights into the loader buffer (C path, no R round-trip)
 #' @param id network id.
 #' @return invisibly, the number of weights synced.
-#' @export
+#' @keywords internal
 nnTorchSync <- function(id) invisible(.Call(`_nlmixr2nn_nnTorchSync`, as.integer(id)))
 
 #' Flat weights of a torch module (nnWeightLayout order)
 #' @param id network id.
 #' @return numeric vector.
-#' @export
+#' @keywords internal
 nnTorchWeights <- function(id) .Call(`_nlmixr2nn_nnTorchGetWeights`, as.integer(id))
 
 #' Load flat weights into a torch module
 #' @param id network id.
 #' @param values numeric weight vector.
 #' @return invisibly NULL.
-#' @export
+#' @keywords internal
 nnTorchSetWeights <- function(id, values) {
   invisible(.Call(`_nlmixr2nn_nnTorchSetWeights`, as.integer(id), as.double(values)))
 }
@@ -47,13 +47,13 @@ nnTorchSetWeights <- function(id, values) {
 #' @param id network id.
 #' @param x numeric input vector of length K.
 #' @return numeric scalar.
-#' @export
+#' @keywords internal
 nnTorchForward <- function(id, x) .Call(`_nlmixr2nn_nnTorchForward`, as.integer(id), as.double(x))
 
 #' Free a torch module
 #' @param id network id.
 #' @return invisibly NULL.
-#' @export
+#' @keywords internal
 nnTorchFree <- function(id) {
   .Call(`_nlmixr2nn_nnTorchFree`, as.integer(id))
   .nnEnv$torchIds <- setdiff(.nnEnv$torchIds, as.integer(id))
@@ -65,11 +65,11 @@ nnTorchFree <- function(id) {
 #' @param id network id.
 #' @param file path to the serialized module.
 #' @return invisibly NULL.
-#' @export
+#' @keywords internal
 nnTorchSave <- function(id, file) invisible(.Call(`_nlmixr2nn_nnTorchSave`, as.integer(id), file))
 
 #' @rdname nnTorchSave
-#' @export
+#' @keywords internal
 nnTorchLoad <- function(id, file) invisible(.Call(`_nlmixr2nn_nnTorchLoad`, as.integer(id), file))
 
 .nnOptCode <- c(sgd = 0L, adam = 1L)
@@ -79,21 +79,21 @@ nnTorchLoad <- function(id, file) invisible(.Call(`_nlmixr2nn_nnTorchLoad`, as.i
 #' @param type "adam" or "sgd".
 #' @param lr learning rate.
 #' @return invisibly NULL.
-#' @export
+#' @keywords internal
 nnTorchOptInit <- function(id, type = "adam", lr = 0.05) {
   type <- match.arg(tolower(type), names(.nnOptCode))
   invisible(.Call(`_nlmixr2nn_nnTorchOptInit`, as.integer(id), .nnOptCode[[type]], as.double(lr)))
 }
 
 #' @rdname nnTorchOptInit
-#' @export
+#' @keywords internal
 nnTorchZeroGrad <- function(id) invisible(.Call(`_nlmixr2nn_nnTorchZeroGrad`, as.integer(id)))
 
 #' Batch forward pass of a torch module
 #' @param id network id.
 #' @param X numeric matrix of inputs, `N` rows by `K` columns.
 #' @return numeric vector of length `N`.
-#' @export
+#' @keywords internal
 nnTorchForwardBatch <- function(id, X) {
   X <- as.matrix(X)
   .Call(`_nlmixr2nn_nnTorchForwardBatch`, as.integer(id),
@@ -105,7 +105,7 @@ nnTorchForwardBatch <- function(id, X) {
 #' @param X numeric matrix of inputs, `N` rows by `K` columns.
 #' @param G numeric cotangent vector of length `N` (d(loss)/d(output)).
 #' @return invisibly NULL.
-#' @export
+#' @keywords internal
 nnTorchBackward <- function(id, X, G) {
   X <- as.matrix(X)
   invisible(.Call(`_nlmixr2nn_nnTorchBackward`, as.integer(id),
@@ -115,7 +115,7 @@ nnTorchBackward <- function(id, X, G) {
 #' Flattened parameter gradients (nnWeightLayout order)
 #' @param id network id.
 #' @return numeric vector.
-#' @export
+#' @keywords internal
 nnTorchGetGrad <- function(id) .Call(`_nlmixr2nn_nnTorchGetGrad`, as.integer(id))
 
 #' Set the network's parameter gradients from a flat vector (nnWeightLayout order)
@@ -127,14 +127,14 @@ nnTorchGetGrad <- function(id) .Call(`_nlmixr2nn_nnTorchGetGrad`, as.integer(id)
 #' @param id network id.
 #' @param grad numeric gradient vector of length `H*K + 2*H + 1`.
 #' @return invisibly NULL.
-#' @export
+#' @keywords internal
 nnTorchSetGrad <- function(id, grad)
   invisible(.Call(`_nlmixr2nn_nnTorchSetGrad`, as.integer(id), as.double(grad)))
 
 #' Optimizer step; also syncs updated weights into the loader buffer
 #' @param id network id.
 #' @return invisibly NULL.
-#' @export
+#' @keywords internal
 nnTorchStep <- function(id) invisible(.Call(`_nlmixr2nn_nnTorchStep`, as.integer(id)))
 
 #' Train a torch module to a target with an L2 loss (standalone helper)
@@ -151,7 +151,7 @@ nnTorchStep <- function(id) invisible(.Call(`_nlmixr2nn_nnTorchStep`, as.integer
 #' @param lr learning rate.
 #' @param type "adam" or "sgd".
 #' @return numeric vector of the loss at each step.
-#' @export
+#' @keywords internal
 nnTorchTrain <- function(id, X, target, steps = 200L, lr = 0.05, type = "adam") {
   X <- as.matrix(X); target <- as.double(target)
   nnTorchOptInit(id, type, lr)
@@ -176,7 +176,7 @@ nnTorchTrain <- function(id, X, target, steps = 200L, lr = 0.05, type = "adam") 
 #' @param x an assembled rxode2 model / ui object built with [nn()].
 #' @param seed optional integer seed for reproducible initialization.
 #' @return invisibly, a data.frame of the created modules.
-#' @export
+#' @keywords internal
 nnTorchModel <- function(x, seed = NULL) {
   reg <- .nnEnv$reg
   if (length(reg) == 0L) {

@@ -5,18 +5,17 @@
 \title{Neural-network training schedule for `nlmixr2nn`}
 \usage{
 nnControl(
-  mode = c("joint", "iter"),
-  rounds = 200L,
-  tol = 0.001,
-  wSteps = 2L,
-  outerPerRound = 1L,
-  lr = 0.03,
-  warmSteps = 0L,
-  warmStart = c("lbfgsb3c", "nlminb", "nlm", "optim", "n1qn1", "bobyqa", "newuoa",
-    "uobyqa", "none", "pop"),
-  warmPopIters = 3L,
-  cotangent = c("gaussian", "exact"),
-  optimizer = c("adam", "sgd"),
+  mode = NULL,
+  rounds = NULL,
+  tol = NULL,
+  wSteps = NULL,
+  outerPerRound = NULL,
+  lr = NULL,
+  warmSteps = NULL,
+  warmStart = NULL,
+  warmPopIters = NULL,
+  cotangent = NULL,
+  optimizer = NULL,
   seed = NULL
 )
 }

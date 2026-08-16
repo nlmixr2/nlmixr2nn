@@ -36,8 +36,19 @@ typedef struct {
   int act;    /* 0 = ReLU, 1 = Softplus, 2 = tanh */
   int nW;     /* block length = H*K + 2*H + 1 */
   int hasW;   /* whether an external weight buffer is populated */
+  int nAlloc; /* length actually allocated in `weights` */
   double *weights; /* externally-owned weights (from torch / nnSetWeights) */
 } nn_meta;
+
+/* `nW` is derived from the SHAPE (nnSetMeta) while `weights` is supplied
+   separately (nnSetWeights), so the two can disagree: binding a 10-weight
+   buffer and then declaring a 25-weight shape would leave every consumer
+   striding 25 doubles out of a 10-double allocation.  `nAlloc` records what was
+   actually allocated so that mismatch is detectable, and a mismatched buffer is
+   treated as absent -- reading past it is never better than having no weights. */
+static inline int nnHasUsableW(const nn_meta *m) {
+  return m->hasW && m->weights != NULL && m->nAlloc == m->nW;
+}
 
 static nn_meta nnReg[NN_MAX];
 
@@ -48,7 +59,7 @@ static nn_meta nnReg[NN_MAX];
 void nnParLoader(rx_solve *rx, double *gpars, int npars, int ncols) {
   (void) rx;
   for (int id = 0; id < NN_MAX; id++) {
-    if (!nnReg[id].set || !nnReg[id].hasW || nnReg[id].weights == NULL) continue;
+    if (!nnReg[id].set || !nnHasUsableW(&nnReg[id])) continue;
     int base = nnReg[id].base, nW = nnReg[id].nW;
     if (base < 0 || base + nW > npars) continue;
     const double *w = nnReg[id].weights;
@@ -220,6 +231,37 @@ SEXP _nlmixr2nn_nnWeightGradW(SEXP K_, SEXP H_, SEXP act_, SEXP w, SEXP x) {
   return out;
 }
 
+/* Forward value from an EXPLICIT weight vector, for a batch of inputs.
+   `x` is an nRow x K matrix in column-major (R) order.
+
+   `nnForward()` above reads its weights from the live solve's par_ptr, so it
+   only answers inside an active solve.  Inspecting what a fitted network
+   learned has to work outside one, and it must use exactly these activations
+   rather than a reimplementation that could drift from them -- so it shares
+   nnAct() with the in-solve path. */
+SEXP _nlmixr2nn_nnForwardW(SEXP K_, SEXP H_, SEXP act_, SEXP w, SEXP x) {
+  int K = asInteger(K_), H = asInteger(H_), act = asInteger(act_);
+  int nRow = Rf_length(x) / (K > 0 ? K : 1);
+  const double *W1 = REAL(w);
+  const double *b1 = W1 + H * K;
+  const double *W2 = b1 + H;
+  double b2 = W2[H];
+  const double *X = REAL(x);
+  SEXP out = PROTECT(allocVector(REALSXP, nRow));
+  double *o = REAL(out);
+  for (int i = 0; i < nRow; i++) {
+    double v = b2;
+    for (int j = 0; j < H; j++) {
+      double z = b1[j];
+      for (int k = 0; k < K; k++) z += W1[j * K + k] * X[(size_t) k * nRow + i];
+      v += W2[j] * nnAct(act, z);
+    }
+    o[i] = v;
+  }
+  UNPROTECT(1);
+  return out;
+}
+
 SEXP _nlmixr2nn_nnWeightGrad(SEXP id, SEXP x) {
   int i = asInteger(id);
   if (i < 0 || i >= NN_MAX || !nnReg[i].set) return allocVector(REALSXP, 0);
@@ -245,6 +287,15 @@ SEXP _nlmixr2nn_nnSetMeta(SEXP id, SEXP base, SEXP K, SEXP H, SEXP act) {
   nnReg[i].H    = asInteger(H);
   nnReg[i].act  = asInteger(act);
   nnReg[i].nW   = nnReg[i].H * nnReg[i].K + 2 * nnReg[i].H + 1;
+  /* declaring a new shape invalidates a weight buffer sized for the old one.
+     Dropping it is the only safe option: keeping it would let every consumer
+     stride the new nW out of the old allocation. */
+  if (nnReg[i].weights != NULL && nnReg[i].nAlloc != nnReg[i].nW) {
+    free(nnReg[i].weights);
+    nnReg[i].weights = NULL;
+    nnReg[i].nAlloc = 0;
+    nnReg[i].hasW = 0;
+  }
   return ScalarLogical(1);
 }
 
@@ -259,6 +310,7 @@ void nnSetWeightsC(int id, const double *w, int n) {
   if (nnReg[id].weights != NULL) free(nnReg[id].weights);
   nnReg[id].weights = buf;
   nnReg[id].nW = n;
+  nnReg[id].nAlloc = n;
   nnReg[id].hasW = 1;
 }
 
@@ -273,6 +325,7 @@ SEXP _nlmixr2nn_nnSetWeights(SEXP id, SEXP vals) {
   if (nnReg[i].weights != NULL) free(nnReg[i].weights);
   nnReg[i].weights = buf;
   nnReg[i].nW = n;
+  nnReg[i].nAlloc = n;
   nnReg[i].hasW = 1;
   return ScalarLogical(1);
 }
@@ -281,6 +334,7 @@ SEXP _nlmixr2nn_nnClearMeta(void) {
   for (int i = 0; i < NN_MAX; i++) {
     nnReg[i].set = 0;
     nnReg[i].hasW = 0;
+    nnReg[i].nAlloc = 0;
     if (nnReg[i].weights != NULL) { free(nnReg[i].weights); nnReg[i].weights = NULL; }
   }
   return ScalarLogical(1);

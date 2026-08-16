@@ -4,8 +4,7 @@
 ## matrix (the full FOCEI end-to-end fit is exercised separately).
 
 test_that("nnOuterStep assembles dLL/dw from the matrix and steps the optimizer", {
-  ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
-  if (!ok) skip("libtorch backend not available")
+  skip_if_no_torch()
 
   K <- 2L; H <- 1L; nW <- H * K + 2L * H + 1L        # 5 weights
   nnClearMeta(); nnSetMeta(0L, base = 0L, K = K, H = H, act = "tanh")

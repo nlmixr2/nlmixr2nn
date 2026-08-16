@@ -12,3 +12,4 @@ invisibly TRUE.
 \description{
 Clear all registered network layouts
 }
+\keyword{internal}

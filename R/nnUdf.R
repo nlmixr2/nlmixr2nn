@@ -37,20 +37,40 @@ rxUdfUi.nn <- function(fun) {
 #' the network's analytic input derivative -- exact, no finite differences -- and
 #' it is far more identifiable than a random effect on every weight.
 #'
+#' The network's initial weights are drawn WHEN THE MODEL IS PARSED, using R's
+#' random number generator, and are carried on the model itself.  So
+#' `set.seed(1)` makes a network reproducible across sessions, and a freshly
+#' parsed model is immediately solvable -- no torch module and no setup call.
+#' Drawing a network's weights does not disturb the caller's random stream.
+#'
 #' @param ... one or more state/covariate inputs to the network (given
 #'   positionally, e.g. `nn(central, t)`).
 #' @param n_hidden hidden-layer width (default 5).
-#' @param act activation, one of "relu", "softplus", "tanh".
-#' @param sd standard deviation of the random weight initialization.
+#' @param act activation, one of "softplus" (default), "tanh", "relu", "gelu" or
+#'   "silu".  The default is smooth with a nonzero second derivative, which
+#'   matters because the model's Jacobian and the FOCEi sensitivities are both
+#'   chained through it; "relu" has a kink and a zero second derivative.
+#' @param init weight initialization: `"ude"` (default) draws fan-in scaled
+#'   weights with zero biases and a shrunk output layer, so an untrained network
+#'   is a small perturbation of the mechanistic model; `"torch"` reproduces
+#'   libtorch's `nn::Linear` default; `"normal"` is a flat `N(0, initSd)`.
+#' @param initSd scale of the initialization: the output-layer standard
+#'   deviation for `init = "ude"`, and the standard deviation of every weight
+#'   for `init = "normal"`.
+#' @param seed optional integer pinning THIS network's initial weights
+#'   regardless of the ambient seed.  Normally unnecessary -- use `set.seed()`.
 #' @param num network occurrence number; queried via `rxUdfUiNum()` if `NULL`.
 #' @param iniDf initial-estimate data.frame; queried via `rxUdfUiIniDf()` if
 #'   `NULL`.
-#' @return a list consumed by [rxode2::rxUdfUi()] (`replace`, `before`, `iniDf`).
+#' @return a list consumed by [rxode2::rxUdfUi()] (`replace`, `before`).
 #' @export
 nn <- function(..., n_hidden = 5L,
-               act = c("relu", "softplus", "tanh", "gelu", "silu"),
-               sd = 0.1, num = NULL, iniDf = NULL) {
+               act = c("softplus", "tanh", "relu", "gelu", "silu"),
+               init = c("ude", "torch", "normal"), initSd = 0.1,
+               seed = NULL, num = NULL, iniDf = NULL) {
   act <- match.arg(act)
+  init <- match.arg(init)
+  checkmate::assertNumeric(initSd, lower = 0, len = 1L, .var.name = "initSd")
   ## capture positional inputs symbolically (do NOT evaluate them)
   .dots <- as.list(substitute(list(...)))[-1L]
   ## drop any named options accidentally caught in ... (n_hidden/act/sd)
@@ -61,6 +81,14 @@ nn <- function(..., n_hidden = 5L,
   if (K < 1L) stop("nn() needs at least one input", call. = FALSE)
   if (K > 4L) {
     stop("nn() supports 1 to 4 inputs (nn1..nn4)", call. = FALSE)
+  }
+  ## a vector n_hidden (a deeper network) is rejected HERE, at the user
+  ## boundary, rather than deeper down: the initialization and the weight layout
+  ## below are already written for a vector, so adding depth later is an
+  ## additive change to the compiled evaluators, not a redesign.
+  if (length(n_hidden) != 1L) {
+    stop("nn() supports a single hidden layer; `n_hidden` must be one integer ",
+         "(multi-layer networks are not yet supported)", call. = FALSE)
   }
   H <- as.integer(n_hidden)
   checkmate::assertIntegerish(H, lower = 1L, len = 1L, .var.name = "n_hidden")
@@ -86,8 +114,13 @@ nn <- function(..., n_hidden = 5L,
   ## from a PREVIOUS model do not leak in (otherwise a later single-nn model would
   ## still carry a stale id-1 network from an earlier multi-nn model).
   if (num == 1L) .nnEnv$reg <- list()
+  ## the weights are DRAWN HERE, at parse time, with R's RNG (R/nnInit.R).  They
+  ## are moved onto the ui by .nnAdopt() the moment the model is assembled --
+  ## `rxUdfUi()` has no field that could carry a value out of this function.
+  .values <- .nnDrawSeeded(id, K, H, act, init, initSd, seed)
   .nnEnv$reg[[as.character(id)]] <-
-    list(id = id, K = K, H = H, act = act, weights = wnames)
+    list(id = id, K = K, H = H, act = act, weights = wnames,
+         values = stats::setNames(.values, wnames), metaVersion = 1L)
 
   .replace <- paste0("nn", K, "(", id, ",", paste(.inputs, collapse = ","), ")")
   list(replace = .replace, before = .before)
@@ -103,7 +136,7 @@ attr(rxUdfUi.nn, "nargs") <- NULL   # variadic
 #'
 #' @param data a data.frame with the estimation/simulation data.
 #' @return `data` with any missing weight-covariate columns added (value 0).
-#' @export
+#' @keywords internal
 nnCovData <- function(data) {
   for (m in .nnEnv$reg) for (w in m$weights)
     if (is.null(data[[w]])) data[[w]] <- 0
@@ -126,7 +159,7 @@ nnCovData <- function(data) {
 #' @param x an rxode2 model / ui object, or a character vector of parameter
 #'   names in solve order.
 #' @return invisibly, a data.frame of the registered networks.
-#' @export
+#' @keywords internal
 nnUpdate <- function(x) {
   reg <- .nnEnv$reg
   if (length(reg) == 0L) return(invisible(data.frame()))
@@ -168,7 +201,7 @@ nnUpdate <- function(x) {
 #'
 #' @param expr expression to evaluate with the nn loader active.
 #' @return the value of `expr`.
-#' @export
+#' @keywords internal
 #' @author Matthew L. Fidler
 nnWithLoader <- function(expr) {
   .nnLoaderOn()

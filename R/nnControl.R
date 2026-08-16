@@ -67,37 +67,73 @@
 #' @return an object of class `"nnControl"`.
 #' @export
 #' @author Matthew L. Fidler
-nnControl <- function(mode = c("joint", "iter"),
-                      rounds = 200L, tol = 1e-3, wSteps = 2L, outerPerRound = 1L,
-                      lr = 0.03, warmSteps = 0L,
-                      warmStart = c("lbfgsb3c", "nlminb", "nlm", "optim", "n1qn1",
-                                    "bobyqa", "newuoa", "uobyqa", "none", "pop"),
-                      warmPopIters = 3L, cotangent = c("gaussian", "exact"),
-                      optimizer = c("adam", "sgd"), seed = NULL) {
-  mode <- match.arg(mode)
-  optimizer <- match.arg(optimizer)
-  warmStart <- match.arg(warmStart)
-  cotangent <- match.arg(cotangent)
-  if (warmStart == "pop") warmStart <- "nlminb"    # back-compat alias
-  checkmate::assertIntegerish(rounds, lower = 1L, len = 1L, .var.name = "rounds")
-  checkmate::assertNumeric(tol, lower = 0, len = 1L, .var.name = "tol")
-  checkmate::assertIntegerish(wSteps, lower = 1L, len = 1L, .var.name = "wSteps")
-  checkmate::assertIntegerish(outerPerRound, lower = 1L, len = 1L, .var.name = "outerPerRound")
-  checkmate::assertNumeric(lr, lower = 0, len = 1L, .var.name = "lr")
-  checkmate::assertIntegerish(warmSteps, lower = 0L, len = 1L, .var.name = "warmSteps")
-  checkmate::assertIntegerish(warmPopIters, lower = 1L, len = 1L, .var.name = "warmPopIters")
-  structure(list(mode = mode, rounds = as.integer(rounds), tol = as.numeric(tol),
-                 wSteps = as.integer(wSteps), outerPerRound = as.integer(outerPerRound),
-                 lr = as.numeric(lr), warmSteps = as.integer(warmSteps),
-                 warmStart = warmStart, warmPopIters = as.integer(warmPopIters),
+nnControl <- function(mode = NULL, rounds = NULL, tol = NULL, wSteps = NULL,
+                      outerPerRound = NULL, lr = NULL, warmSteps = NULL,
+                      warmStart = NULL, warmPopIters = NULL, cotangent = NULL,
+                      optimizer = NULL, seed = NULL) {
+  ## Every argument defaults to NULL, meaning "infer it" (R/nnSchedule.R).  What
+  ## matters is not the value but WHICH arguments the caller named: an explicit
+  ## `mode = "joint"` must be distinguishable from the inferred one, so that the
+  ## schedule can honour it -- or refuse it -- deliberately.
+  .supplied <- setdiff(names(as.list(match.call()))[-1L], "")
+
+  .oneOf <- function(v, nm, choices) {
+    if (is.null(v)) return(NULL)
+    v <- as.character(v)
+    if (length(v) != 1L || !(v %in% choices)) {
+      stop("nnControl(", nm, "=) must be one of: ",
+           paste0("\"", choices, "\"", collapse = ", "), call. = FALSE)
+    }
+    v
+  }
+  mode <- .oneOf(mode, "mode", c("joint", "iter"))
+  optimizer <- .oneOf(optimizer, "optimizer", c("adam", "sgd"))
+  cotangent <- .oneOf(cotangent, "cotangent", c("gaussian", "exact"))
+  warmStart <- .oneOf(warmStart, "warmStart",
+                      c("lbfgsb3c", "nlminb", "nlm", "optim", "n1qn1",
+                        "bobyqa", "newuoa", "uobyqa", "none", "pop"))
+  if (identical(warmStart, "pop")) warmStart <- "nlminb"   # back-compat alias
+
+  ## `lower` is optional: a seed is an arbitrary integer, with no bound at all,
+  ## and checkmate rejects `lower = NA` outright
+  .int <- function(v, nm, lower = NULL) {
+    if (is.null(v)) return(NULL)
+    if (is.null(lower)) {
+      checkmate::assertIntegerish(v, len = 1L, .var.name = nm)
+    } else {
+      checkmate::assertIntegerish(v, lower = lower, len = 1L, .var.name = nm)
+    }
+    as.integer(v)
+  }
+  .num <- function(v, nm, lower) {
+    if (is.null(v)) return(NULL)
+    checkmate::assertNumeric(v, lower = lower, len = 1L, .var.name = nm)
+    as.numeric(v)
+  }
+  structure(list(mode = mode,
+                 rounds = .int(rounds, "rounds", 1L),
+                 tol = .num(tol, "tol", 0),
+                 wSteps = .int(wSteps, "wSteps", 1L),
+                 outerPerRound = .int(outerPerRound, "outerPerRound", 1L),
+                 lr = .num(lr, "lr", 0),
+                 warmSteps = .int(warmSteps, "warmSteps", 0L),
+                 warmStart = warmStart,
+                 warmPopIters = .int(warmPopIters, "warmPopIters", 1L),
                  cotangent = cotangent, optimizer = optimizer,
-                 seed = if (is.null(seed)) NULL else as.integer(seed)),
-            class = "nnControl")
+                 seed = .int(seed, "seed")),
+            supplied = .supplied, class = "nnControl")
 }
 
 #' @export
 print.nnControl <- function(x, ...) {
-  cat(sprintf("nnControl (nlmixr2nn training schedule): mode=%s, rounds<=%d, tol=%.2g, wSteps=%d, lr=%.3g\n",
-              x$mode, x$rounds, x$tol, x$wSteps, x$lr))
+  .set <- attr(x, "supplied")
+  if (is.null(.set) || length(.set) == 0L) {
+    cat("nnControl (nlmixr2nn): everything inferred from the model, data and estimator\n")
+    return(invisible(x))
+  }
+  cat("nnControl (nlmixr2nn): ",
+      paste(vapply(.set, function(.n) paste0(.n, "=", format(x[[.n]])), character(1)),
+            collapse = ", "),
+      "\n  (all other settings inferred)\n", sep = "")
   invisible(x)
 }

@@ -19,3 +19,4 @@ invisibly NULL.
 \description{
 Accumulate the vector-Jacobian product d(sum G*y)/d(w) into the grads
 }
+\keyword{internal}

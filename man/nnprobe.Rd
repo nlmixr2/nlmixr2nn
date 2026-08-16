@@ -23,3 +23,4 @@ current rxode2 solve; `nnnpars(x)` returns the number of parameters.  These
 validate that a package-exported custom function can read the solve's
 parameter vector, which the neural-network functions rely on.
 }
+\keyword{internal}

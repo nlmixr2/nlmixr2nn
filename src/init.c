@@ -29,6 +29,7 @@ extern SEXP _nlmixr2nn_nnnpars(SEXP);
 extern SEXP _nlmixr2nn_nnEval(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnWeightGrad(SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnWeightGradW(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP _nlmixr2nn_nnForwardW(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnSetMeta(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnSetWeights(SEXP, SEXP);
 extern SEXP _nlmixr2nn_nnClearMeta(void);
@@ -63,6 +64,7 @@ void R_init_nlmixr2nn(DllInfo *dll) {
     {"_nlmixr2nn_nnEval",     (DL_FUNC) &_nlmixr2nn_nnEval,     5},
     {"_nlmixr2nn_nnWeightGrad",(DL_FUNC) &_nlmixr2nn_nnWeightGrad, 2},
     {"_nlmixr2nn_nnWeightGradW",(DL_FUNC) &_nlmixr2nn_nnWeightGradW, 5},
+    {"_nlmixr2nn_nnForwardW",(DL_FUNC) &_nlmixr2nn_nnForwardW, 5},
     {"_nlmixr2nn_nnSetMeta",  (DL_FUNC) &_nlmixr2nn_nnSetMeta,  5},
     {"_nlmixr2nn_nnSetWeights",(DL_FUNC) &_nlmixr2nn_nnSetWeights, 2},
     {"_nlmixr2nn_nnClearMeta",(DL_FUNC) &_nlmixr2nn_nnClearMeta,0},

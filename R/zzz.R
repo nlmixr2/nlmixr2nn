@@ -25,6 +25,11 @@
   if ("rxRegisterUiPrep" %in% getNamespaceExports("rxode2")) {
     rxode2::rxRegisterUiPrep("nlmixr2nn:rehydrate", .nnRehydrate)
   }
+  ## move each freshly parsed model's parse-time network state (shapes + the
+  ## weights nn() drew) onto the ui itself, while it is still a mutable
+  ## environment -- see R/nnAdopt.R.  Without this a model would leave the
+  ## parser with no weights at all.
+  .nnRegisterAdopt()
 }
 
 .nnTransRows <- function() {
@@ -82,6 +87,7 @@
   if ("rxRemoveUiPrep" %in% getNamespaceExports("rxode2")) {
     try(rxode2::rxRemoveUiPrep("nlmixr2nn:rehydrate"), silent = TRUE)
   }
+  .nnUnregisterAdopt()
   try(.Call(`_nlmixr2nn_nnUnregisterLoader`), silent = TRUE)
   ## every registration handed to nlmixr2est must come back before this DLL goes
   ## away: nlmixr2est cannot tell that we unloaded, so anything left behind is

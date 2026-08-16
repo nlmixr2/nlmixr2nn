@@ -26,3 +26,4 @@ models: `par_ptr` places population parameters first in theta (`ntheta`)
 order, then covariates.  This uses the model `iniDf` theta order when
 available, and otherwise the declared parameter order (raw rxode2 models).
 }
+\keyword{internal}

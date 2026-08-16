@@ -21,7 +21,7 @@
 #'   prediction is not the state itself).
 #' @param dv observed values, in the matrix's row order (subject-major).
 #' @return invisibly NULL.  Installs the callback via nlmixr2est.
-#' @export
+#' @keywords internal
 nnOuterRegister <- function(nnid, swCols, dv) {
   .nnOuterEnv$nnid <- as.integer(nnid)
   .nnOuterEnv$swCols <- as.integer(swCols)
@@ -34,7 +34,7 @@ nnOuterRegister <- function(nnid, swCols, dv) {
 }
 
 #' @rdname nnOuterRegister
-#' @export
+#' @keywords internal
 nnOuterUnregister <- function() {
   .Call("_nlmixr2est_setNnOuterFn", NULL, PACKAGE = "nlmixr2est")
   invisible()

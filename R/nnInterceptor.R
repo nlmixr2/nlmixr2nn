@@ -26,12 +26,22 @@
 .nnEstInterceptor <- function(env) {
   .ui <- tryCatch(rxode2::rxUiDecompress(env$ui), error = function(e) NULL)
   if (is.null(.ui) || !.nnUiHasNn(.ui)) return(NULL)          # not an nn model
-  .sched <- env$.nlmixr2Dots$nn
-  if (is.null(.sched)) {
-    .sched <- nnControl()                                     # default schedule
-  } else if (!inherits(.sched, "nnControl")) {
+  .user <- env$.nlmixr2Dots$nn
+  if (!is.null(.user) && !inherits(.user, "nnControl")) {
     stop("the nn= argument to nlmixr2() must be an nnControl()", call. = FALSE)
   }
+  ## The schedule is INFERRED from the model, the data and the estimator that was
+  ## asked for; `nn=` is an optional set of overrides, not a required argument.
+  ## Inference needs the network size, which comes from the shapes the parse
+  ## attached to the ui.
+  .meta <- .nnUiMeta(.ui)
+  if (is.null(.meta) || length(.meta) == 0L) .meta <- .nnEnv$reg
+  .nW <- tryCatch(
+    sum(vapply(.meta, function(m) as.integer(m$H * m$K + 2L * m$H + 1L), integer(1))),
+    error = function(e) NA_integer_)
+  .hasTrained <- isTRUE(tryCatch(get("nnTrained", envir = .ui, inherits = FALSE),
+                                 error = function(e) FALSE))
+  .sched <- .nnResolveSched(.user, .nnInferSched(env, .nW, .hasTrained))
   .nnRun(env, .sched)
 }
 

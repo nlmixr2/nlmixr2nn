@@ -1,30 +1,31 @@
 ---
-title: "Neural-network ODEs with nlmixr2nn"
+title: "Neural networks in nlmixr2 models"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Neural-network ODEs with nlmixr2nn}
+  %\VignetteIndexEntry{Neural networks in nlmixr2 models}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 ```{r, include = FALSE}
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+## NB: the package must be loaded before probing the backend -- the symbol lives
+## in its DLL, so probing first silently reports "no torch" and skips every
+## fitting chunk, leaving a vignette that builds in seconds and demonstrates
+## nothing.
 .hasRx    <- requireNamespace("rxode2", quietly = TRUE)
-.hasTorch <- .hasRx &&
-  tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable")), error = function(e) FALSE)
+.hasNn    <- .hasRx && requireNamespace("nlmixr2nn", quietly = TRUE)
+.hasEst   <- .hasNn && requireNamespace("nlmixr2est", quietly = TRUE)
+.hasTorch <- .hasEst &&
+  tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable", PACKAGE = "nlmixr2nn")),
+           error = function(e) FALSE)
 ```
 
-## What nlmixr2nn does
+## What `nn()` is
 
-`nlmixr2nn` lets you drop a neural network into an ODE right-hand side for
-`rxode2`/`nlmixr2`. It extends the idea of `pmxNODE`, but instead of expanding
-every weight into explicit model algebra (which does not scale), the network is
-an **opaque, compiled function**: the model text stays O(1) in the network size,
-the value and its analytic input derivatives are computed in fast thread-safe C,
-and a C++ `libtorch` module owns and trains the weights.
-
-The network is written with the lower-case `nn()` function (upper-case `NN()` is
-`pmxNODE`):
+`nn()` puts a neural network inside a model. You write it where you would write
+any other term, and everything else is an ordinary `rxode2`/`nlmixr2` workflow:
+the model solves, `nlmixr2()` fits it, `predict()` works, `saveRDS()` works.
 
 ```{r, eval = .hasRx}
 library(nlmixr2nn)
@@ -38,298 +39,215 @@ mod <- function() {
     ka <- exp(lka)
     Vc <- exp(lVc)
     d/dt(depot)   <- -ka * depot
-    ## a 6-unit softplus network of the central amount enters the elimination
-    d/dt(central) <-  ka * depot - nn(central, n_hidden = 6, act = "softplus")
+    ## a 6-unit network of the central amount enters the elimination
+    d/dt(central) <-  ka * depot - nn(central, n_hidden = 6)
     cp <- central / Vc
   })
 }
+
+set.seed(42)
 ui <- rxode2::rxode2(mod)
 ```
 
-At parse time `nn(central, ...)` is replaced by a single compiled call and the
-network weights are added as randomly-initialized parameters:
+The network is **opaque**: it becomes a single compiled call, so the model text
+stays the same size no matter how big the network is. Its value and its exact
+input derivatives are computed in fast thread-safe C, and those derivatives are
+what make a random effect passed *into* a network identifiable.
 
 ```{r, eval = .hasRx}
-cat(paste(vapply(ui$lstExpr, deparse1, character(1)), collapse = "\n"))
+cat(paste(ui$lstChr, collapse = "\n"))
 ```
 
-## Solving with a torch module
+The weights were drawn when the model was parsed, using R's random number
+generator — so `set.seed()` reproduces a network exactly, in this session or any
+other, and the model is ready to solve immediately.
 
-Create a `libtorch` module for each network in the model, register the weight
-layout, and solve. `nnTorchModel()` builds the modules; `nnUpdate()` resolves
-where each network's weights live in the solve parameter vector and syncs the
-module weights into the loader buffer that the rxode2 hook injects each solve.
+```{r, eval = .hasRx}
+head(nnWeights(ui), 4)
+```
 
-```{r, eval = .hasTorch}
-nnTorchModel(ui, seed = 1)   # C++ torch module for network 0
-nnUpdate(ui)                 # register layout + sync weights
+Everything below is a single `nlmixr2()` call. There is no setup step.
 
+## Simulating a model you have not fitted
+
+Because the model carries its own weights, it solves straight away. This is the
+quickest way to check that a model does what you think before fitting anything.
+
+```{r, eval = .hasRx}
 ev <- rxode2::et(amt = 100, cmt = "depot") |> rxode2::et(0, 24, by = 4)
-head(rxode2::rxSolve(ui, ev))
+head(rxode2::rxSolve(ui, ev), 4)
 ```
 
-## Training the network
+## Learning a term you do not know (UDE)
 
-The weights are trained by torch, not by nlmixr2's optimizer. The gradient
-bridge turns a cotangent on the network output into `d(loss)/d(weights)` via
-torch autograd and steps a torch optimizer. `nnTorchTrain()` demonstrates this
-with an explicit L2 target (in a full fit the cotangent comes from the
-likelihood instead):
+Keep the mechanism you trust and let a small network absorb the part you do not.
+Here the truth is a saturating (Michaelis-Menten) elimination that varies between
+subjects; the model knows only that elimination is *some* bounded function of the
+amount, and a latent random effect `eta.nn` enters the network as an input.
 
 ```{r, eval = .hasTorch}
-id <- 7L
-nnTorchInit(id, K = 1L, H = 12L, act = "gelu", seed = 3)
-X <- matrix(seq(-2, 2, length.out = 41), ncol = 1)
-loss <- nnTorchTrain(id, X, target = sin(X), steps = 400L, lr = 0.05)
-c(first = loss[1], last = tail(loss, 1))
-```
+set.seed(1)
+truth <- rxode2::rxode2("d/dt(centr) = -(2*exp(eV))*centr/(3+centr)")
+etaTrue <- rnorm(8, 0, sqrt(0.15))
+d <- do.call(rbind, lapply(1:8, function(id) {
+  s <- rxode2::rxSolve(truth,
+         data.frame(id = id, time = c(0, .5, 1, 2, 4, 6, 8, 10),
+                    evid = c(1, rep(0, 7)), cmt = 1, amt = c(10, rep(0, 7))),
+         params = c(eV = etaTrue[id]), returnType = "data.frame")
+  s <- s[s$time > 0, ]
+  data.frame(id = id, time = c(0, s$time), evid = c(1, rep(0, nrow(s))), cmt = 1,
+             amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr + rnorm(nrow(s), 0, .1)))
+}))
 
-## Population fitting: the transparent workflow
-
-You fit a mixed-effects model whose ODE contains an `nn()` term the *same way you
-fit any other* `nlmixr2` model -- with a **standard estimator** (`"focei"`,
-`"saem"`, ...). Loading `nlmixr2nn` registers an estimation interceptor that
-detects the `nn()` term and trains the embedded network transparently, using the
-estimator you chose as the inner engine. The only extra argument is `nn =
-nnControl(...)`, the network training *schedule* (it does **not** wrap the inner
-control):
-
-```{r, eval = FALSE}
-nlmixr2(model, data, "focei", foceiControl(...), nn = nnControl(...))
-```
-
-`nnControl(mode=)` picks how the network and the population parameters are
-optimized:
-
-- **`mode = "joint"`** (default) -- co-optimizes the population parameters and the
-  network weights in one interleaved loop: each round takes a few *partial*,
-  warm-started inner iterations and a torch weight step, so the parameters and
-  weights descend *together*. This is the DeepPumas-style approach. True
-  interleaving needs an inner estimator whose partial fit *resumes* from the
-  previous round's estimates: the FOCEi family (`maxOuterIterations`) and the
-  variational methods `advi`/`vae` (`iters`). SAEM/fSAEM (whose stochastic-
-  approximation chain restarts each call) and `imp`/`qrpem` degrade to the
-  iterative loop, which is just as good for them.
-- **`mode = "iter"`** -- runs a *full* inner fit each round with the weights held
-  fixed, then updates the weights: a simpler solve/update/solve scheme. Useful
-  when you want each round to be an ordinary, fully converged fit.
-
-Both stop when the weights (and, for `"joint"`, the objective) stop changing
-between rounds -- `nnControl(tol=)` -- or at the maximum `rounds`. The returned
-fit reports `$nnConverged`, `$nnRounds`, and `$nnParHist` (the per-round trace).
-Covariance and output tables are added once, post-hoc, at the trained weights (the
-intermediate rounds skip them).
-
-**Universal differential equation (UDE) correction** -- keep the mechanistic
-structure you trust and let a small network absorb the part you do not:
-
-```{r, eval = FALSE}
 ude <- function() {
-  ini({ tcl <- 1; tv <- 3.5; add.sd <- 0.5; eta.nn ~ 0.1 })
+  ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
   model({
-    cl <- exp(tcl); v <- exp(tv)
-    d/dt(central) <- -(cl / v) * central + nn(central, eta.nn)  # learned correction
-    cp <- central / v
-    cp ~ add(add.sd)
+    g <- nn(centr, eta.nn, n_hidden = 3, act = "tanh")
+    d/dt(centr) <- -(1 / (1 + exp(-g))) * centr     # a bounded learned rate
+    centr ~ add(add.sd)
   })
 }
+
+fit <- nlmixr2est::nlmixr2(ude, d, "focei")
 ```
 
-**Covariate model discovery** -- let the network learn how covariates drive an
-individual parameter, with a latent random effect for the residual variation:
+That is the whole call: no `nn=` argument, and the data was not touched. The
+result is an ordinary `nlmixr2` fit, so the random effect recovers the
+between-subject variation the way any eta would:
+
+```{r, eval = .hasTorch}
+cor(fit$eta$eta.nn[order(fit$eta$ID)], etaTrue)
+```
+
+To see what the network *learned*, evaluate it directly:
+
+```{r, eval = .hasTorch}
+e <- nnEval(fit, centr = seq(0.5, 10, length.out = 25), eta.nn = 0)
+head(e, 3)
+```
+
+`plot(e)` draws that function, and `plot(e, true = f)` overlays a reference
+curve when you have one.
+
+## Letting the network find a covariate relationship
+
+The same idea with covariates as the inputs: the network learns how they drive a
+parameter, and the latent eta carries what they do not explain.
 
 ```{r, eval = FALSE}
 covmod <- function() {
   ini({ tCL <- 1; tV <- 3.5; add.sd <- 0.5; eta.nn ~ 0.1 })
   model({
-    CL <- exp(tCL + nn(WT, EGFR, eta.nn))                       # learned covariate map
+    CL <- exp(tCL + nn(WT, EGFR, eta.nn))        # learned covariate map
     V  <- exp(tV)
     d/dt(central) <- -(CL / V) * central
     cp <- central / V
     cp ~ add(add.sd)
   })
 }
+fit <- nlmixr2est::nlmixr2(covmod, data, "focei")
 ```
 
-In both cases the inter-individual variability enters as a *latent input* to the
-population network (`eta.nn` above): its inner sensitivity is the network's
-analytic input derivative, so it is identifiable and needs no finite differences.
+## A model with no between-subject variability
 
-You fit with an ordinary estimator (here FOCEi) and its ordinary control; the
-neural-network schedule (`mode`, `wSteps`, `lr`, `tol`, ...) rides alongside in
-`nn = nnControl(...)`:
+Systems-pharmacology models are often fitted with no random effects at all: one
+mechanistic system, with a network standing in for an unknown term. Fit those
+with a population optimizer — `"bobyqa"`, `"nlminb"`, `"lbfgsb3c"` and friends —
+and there is no eta to estimate.
 
 ```{r, eval = .hasTorch}
-nnClearMeta()
-mm <- function() {
-  ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
-  model({
-    g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
-    d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
-    centr ~ add(add.sd)
-  })
-}
 set.seed(1)
-d <- do.call(rbind, lapply(1:6, function(id) {
-  data.frame(id = id, time = c(0, 1, 2, 4, 6), evid = c(1, 0, 0, 0, 0), cmt = 1,
-             amt = c(10, 0, 0, 0, 0),
-             dv = c(NA, 8, 6, 4, 2) + rnorm(5, 0, 0.1))
-}))
-fit <- nlmixr2est::nlmixr2(mm, nnCovData(d), "focei",
-                           nlmixr2est::foceiControl(print = 0L, maxInnerIterations = 10L),
-                           nn = nnControl(mode = "joint", rounds = 10L, wSteps = 2L,
-                                          lr = 0.03, tol = 1e-2, seed = 5))
-```
-
-The result is a standard `nlmixr2` fit: `fit$eta` holds the per-subject latent
-EBEs, `fit$nnParHist` the round-by-round training trace, and the trained weights
-are baked into the model as `rxForcedPars()` -- so `predict(fit)` and simulation
-reproduce them with no external torch/loader state (the fit is self-contained and
-portable, like a `nonmem2rx` model).
-
-The inner estimator is whatever standard `est` you pass: `est = "saem"` or `est =
-"imp"` run the network training with SAEM or importance-sampling inner fits (the
-network weights reach the inner fit through the data, so no estimator-specific
-plumbing is needed). If the fitted model already carries trained weights (as
-`rxForcedPars`, e.g. a previous `nlmixr2nn` fit), those are used as the warm-start
-rather than a fresh random initialization.
-
-**Warm starts.** Random weight initializations can be fragile, so a population
-weight pre-fit -- the "nlm bridge" -- runs **by default** before the loop (unless
-the model already carries trained weights, e.g. a fit passed back in, in which case
-those are the warm start and the pre-fit is skipped). It fits the weights at `eta =
-0` with a fixed-effects optimizer: the weights sit in the vector the optimizer
-moves, giving a robust population weight vector before the random effects enter. As
-*nlm is simply an optimizer*, `nnControl(warmStart = ...)` picks any nlm-family
-optimizer -- `"lbfgsb3c"` (default), `"nlminb"`, `"nlm"`, `"optim"`, `"n1qn1"`
-(gradient-based, using the analytic sensitivity gradient) or `"bobyqa"`,
-`"newuoa"`, `"uobyqa"` (derivative-free) -- and none uses a random effect. It is
-kept deliberately light (`warmPopIters = 3`): a few iterations escape a bad
-initialization while leaving the per-subject variation for the random effect, since
-a long pre-fit lets the population network absorb IIV that should go to the eta.
-Set `warmStart = "none"` to disable it, or raise `warmPopIters` for a stronger
-fixed-effects start (e.g. a population/UDE model with no random effect).
-`nnControl(warmSteps = n)` additionally takes `n` naive-pooled torch steps.
-
-**Error models.** By default the weight gradient uses the closed-form additive /
-proportional-Gaussian score `dLL/df`, so the endpoint must be `add()`, `prop()` or
-both. For any *other* residual model -- lognormal, transform-both-sides, a custom
-likelihood -- pass `nnControl(cotangent = "exact")`: the per-observation `dLL/df`
-is then taken from the inner fit's likelihood-contribution hook (the exact score
-for whatever error model you wrote), so e.g. `centr ~ lnorm(lsd)` trains. Pair it
-with `wSteps = 1` (the captured cotangent is at the round's weights). It works with
-every inner estimator: the FOCEi family and `advi`/`vae` capture it during their
-own fit; `imp`/`impmap`/`saem` (whose likelihood does not fire the hook cleanly at
-the fitted etas) get it from a short FOCEi posthoc at the fit's estimates.
-
-```{r, eval = FALSE}
-nnMod <- function() {
-  ini({ lsd <- 0.2; eta.nn ~ 0.2 })
-  model({
-    g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
-    d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
-    centr ~ lnorm(lsd)                       # non-Gaussian residual
-  })
-}
-nlmixr2(nnMod, data, "focei", foceiControl(),
-        nn = nnControl(cotangent = "exact", wSteps = 1L))
-```
-
-## QSP models: no between-subject variability
-
-Systems-pharmacology (QSP) models are frequently fit with *no* random effects at
-all -- a single mechanistic system, with a network standing in for an unknown term.
-Because *nlm is simply an optimizer*, you fit such a model by passing an nlm-family
-estimator (`"nlm"`, `"nlminb"`, `"bobyqa"`, `"newuoa"`, `"uobyqa"`, `"lbfgsb3c"`,
-`"n1qn1"`, `"optim"`): the network weights become the optimized vector and there is
-no eta. The example below learns a nonlinear (Michaelis-Menten-like) elimination
-rate as a function of concentration, from a single noisy system:
-
-```{r, eval = .hasTorch}
-nnClearMeta()
-## one true system (rate = 2/(3+centr)); no between-subject variability
-truth <- rxode2::rxode2("d/dt(centr) = -(2)*centr/(3+centr)")
-set.seed(1)
-qsp <- do.call(rbind, lapply(1:6, function(id) {
-  s <- rxode2::rxSolve(truth, data.frame(id = id, time = c(0, 0.5, 1, 2, 4, 6, 8, 10),
-         evid = c(1, rep(0, 7)), cmt = 1, amt = c(10, rep(0, 7))), returnType = "data.frame")
+qspTruth <- rxode2::rxode2("d/dt(centr) = -(2)*centr/(3+centr)")
+qd <- do.call(rbind, lapply(1:6, function(id) {
+  s <- rxode2::rxSolve(qspTruth,
+         data.frame(id = id, time = c(0, .5, 1, 2, 4, 6, 8, 10),
+                    evid = c(1, rep(0, 7)), cmt = 1, amt = c(10, rep(0, 7))),
+         returnType = "data.frame")
   s <- s[s$time > 0, ]
   data.frame(id = id, time = c(0, s$time), evid = c(1, rep(0, nrow(s))), cmt = 1,
-             amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr + rnorm(nrow(s), 0, 0.1)))
+             amt = c(10, rep(0, nrow(s))), dv = c(NA, s$centr + rnorm(nrow(s), 0, .1)))
 }))
 
-qspMod <- function() {
-  ini({ add.sd <- 0.3 })                       # residual error only -- NO eta
+qsp <- function() {
+  ini({ add.sd <- 0.3 })                     # residual error only -- no eta
   model({
-    g <- nn(centr, n_hidden = 3L, act = "tanh")
-    d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr   # learned bounded rate
+    g <- nn(centr, n_hidden = 3, act = "tanh")
+    d/dt(centr) <- -(1 / (1 + exp(-g))) * centr
     centr ~ add(add.sd)
   })
 }
-qspFit <- nlmixr2est::nlmixr2(qspMod, nnCovData(qsp), "bobyqa", nn = nnControl(rounds = 60L))
+
+qspFit <- nlmixr2est::nlmixr2(qsp, qd, "bobyqa")
 ```
 
-With no eta there is nothing to alternate, so the block-coordinate loop is not used:
-the weights are fit directly as a population problem with the chosen optimizer over
-the analytic sensitivity solve. The nlm family now reads the injected weights
-natively (the nlm log-likelihood model declares them as covariates), so this is a
-real `bobyqa` fit. The trained network is baked into the model as `rxForcedPars()`,
-so solving the fitted model reproduces the true (concentration-dependent) dynamics:
+The fitted model reproduces the dynamics it was never told about:
 
 ```{r, eval = .hasTorch}
-newd     <- nnCovData(data.frame(time = c(0, 0.5, 1, 2, 4, 6, 8, 10),
-                                 evid = c(1, rep(0, 7)), cmt = 1, amt = c(10, rep(0, 7))))
-fittedSol <- rxode2::rxSolve(qspFit$finalUi, newd, returnType = "data.frame")
-trueSol   <- rxode2::rxSolve(truth, newd, returnType = "data.frame")
-data.frame(time = fittedSol$time, fitted = round(fittedSol$centr, 2), true = round(trueSol$centr, 2))
+nd <- data.frame(time = c(0, .5, 1, 2, 4, 6, 8, 10), evid = c(1, rep(0, 7)),
+                 cmt = 1, amt = c(10, rep(0, 7)))
+a <- rxode2::rxSolve(qspFit$finalUi, nd, returnType = "data.frame")
+b <- rxode2::rxSolve(qspTruth, nd, returnType = "data.frame")
+data.frame(time = a$time, fitted = round(a$centr, 2), true = round(b$centr, 2))
 ```
 
-The same model fit with `est = "focei"` (which supports random effects) would add a
-per-subject eta; here, with `est = "bobyqa"`, it is a pure fixed-effects fit -- the
-right choice when the science says there is no between-subject variability.
+Passing a population-only optimizer for a model that *does* have a random effect
+is an error rather than a silent compromise — the weights and the Omega would
+otherwise come from two different objectives.
 
-## Multiple networks in one model
+## Saving, reloading and refitting
 
-A model may contain several `nn()` terms; they are trained jointly in a single fit.
-Each network gets its own weight block and its own inputs (states, covariates, or a
-latent eta), and only its specified inputs are passed to it:
-
-```{r, eval = FALSE}
-twoNets <- function() {
-  ini({ add.sd <- 0.3 })
-  model({
-    ka <- exp(nn(WT,  n_hidden = 3L))     # network 0: WT  -> absorption
-    cl <- exp(nn(AGE, n_hidden = 3L))     # network 1: AGE -> clearance
-    d/dt(depot)   <- -ka * depot
-    d/dt(central) <-  ka * depot - cl * central
-    central ~ add(add.sd)
-  })
-}
-fit <- nlmixr2est::nlmixr2(twoNets, nnCovData(data), "bobyqa", nn = nnControl())
-```
-
-The weight sensitivities of all networks are carried in one augmented solve, and
-each network's weights are stepped by its own optimizer state; `fit$nnWeights`
-holds every network's trained weights.
-
-## Inputs and activations
-
-The compiled family supports input dimensions `K = 1..4` -- pass several states
-positionally, e.g. `nn(central, t)` -- and the activations `"relu"`,
-`"softplus"`, `"tanh"`, `"gelu"`, and `"silu"`. Value, input gradient, and input
-Hessian are analytic in every case.
-
-## Saving and restoring a trained network
-
-A trained module serializes to a binary and restores for later simulation:
+The trained weights are carried on the fitted model, so a saved fit is
+self-contained: it reloads and re-solves in a fresh session with no external
+state. Feeding a fit back in resumes from its trained weights.
 
 ```{r, eval = .hasTorch}
-f <- tempfile(fileext = ".pt")
-nnTorchSave(id, f)
-nnTorchInit(id, K = 1L, H = 12L, act = "gelu")   # reinitialize (random)
-nnTorchLoad(id, f)                               # restore trained weights
+f <- tempfile(fileext = ".rds")
+saveRDS(qspFit, f)
+reloaded <- readRDS(f)
+identical(round(rxode2::rxSolve(reloaded$finalUi, nd, returnType = "data.frame")$centr, 8),
+          round(a$centr, 8))
 unlink(f)
 ```
-```{r, include = FALSE}
-if (.hasTorch) try(nnTorchFree(id), silent = TRUE)
+
+```{r, eval = FALSE}
+refit <- nlmixr2est::nlmixr2(qspFit, moreData, "bobyqa")   # warm start
 ```
+
+## When you want to steer the training
+
+The training schedule is inferred from the model, the data and the estimator you
+chose: whether the estimator can resume from a partial fit, whether there is a
+random effect, and what the residual model is. `nnControl()` overrides any part
+of it and leaves the rest inferred.
+
+```{r, eval = FALSE}
+nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(rounds = 400, lr = 0.01))
+```
+
+| setting | inferred as | override when |
+|---|---|---|
+| `mode` | `"joint"` when the estimator resumes from a partial fit, else `"iter"` | you want fully converged inner fits each round |
+| `rounds` | 200 joint, 30 iterative, 60 population | training was still improving when it stopped |
+| `cotangent` | closed form for an untransformed `add()`/`prop()` endpoint, exact otherwise | rarely — asking for the closed form on a transformed endpoint is an error |
+| `lr`, `optimizer` | 0.03 (0.01 on a refit), Adam | the objective oscillates or moves too slowly |
+| `warmStart` | a population pre-fit, skipped when the model already carries trained weights | you want a longer or shorter pre-fit |
+
+## What is supported
+
+- **Inputs**: 1 to 4, given positionally — states, covariates, or a latent eta.
+- **Activations**: `"softplus"` (default), `"tanh"`, `"relu"`, `"gelu"`, `"silu"`.
+  The default is smooth with a nonzero second derivative, which matters because
+  the model Jacobian and the FOCEi sensitivities are chained through it.
+- **Hidden layers**: one. `n_hidden` is a single width.
+- **Endpoints**: one, with any normal-distribution residual model — `add()`,
+  `prop()`, both, or a transformation such as `lnorm()`. Count and categorical
+  endpoints are not supported yet.
+- **Networks per model**: several; they are trained together, and `nnEval(net=)`
+  selects between them.
+- **Estimators**: any standard one. `"focei"` and the variational methods
+  interleave network training with the population fit; SAEM and the
+  importance-sampling methods alternate instead.
+
+Network initialization is scaled to each input's magnitude, measured from the
+data, so a network reading a concentration of 0.02 and one reading an amount of
+500 both start in a usable range.

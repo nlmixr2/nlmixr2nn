@@ -19,3 +19,4 @@ Stores the weights (in `nnWeightLayout()` order) that the rxode2 par-loader
 hook injects into the reserved `par_ptr` block on every solve.  This is how
 torch-trained weights reach the solve without being nlmixr2 parameters.
 }
+\keyword{internal}

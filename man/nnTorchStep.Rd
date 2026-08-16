@@ -15,3 +15,4 @@ invisibly NULL.
 \description{
 Optimizer step; also syncs updated weights into the loader buffer
 }
+\keyword{internal}
