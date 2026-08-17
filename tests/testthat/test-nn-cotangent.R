@@ -145,11 +145,18 @@ test_that("exact cotangent trains under non-FOCEi-inner methods via a FOCEi post
   ## recover the IIV.
   ctls <- list(saem = nlmixr2est::saemControl(print = 0L, nBurn = 60L, nEm = 60L, covMethod = ""),
                impmap = nlmixr2est::impmapControl())
+  ## Rounds, per estimator, because they are not interchangeable.  Neither of
+  ## these resumes: each round is a FULL fit whose chain restarts, so the loop
+  ## converges in rounds rather than within them.  SAEM at 4 rounds reaches an
+  ## eta correlation of 0.30 with its rmse still falling; at 12 it reaches 0.89.
+  ## That is the estimator needing iterations, not the gradient being wrong --
+  ## and it is why the inferred schedule gives non-resuming estimators 30 rounds.
+  rounds <- c(saem = 12L, impmap = 4L)
   for (est in names(ctls)) {
     f <- suppressWarnings(suppressMessages(
       nlmixr2est::nlmixr2(modF, nnCovData(data), est, ctls[[est]],
-        nn = nnControl(mode = "iter", rounds = 4L, wSteps = 1L, lr = 0.03, seed = 5L,
-                       warmStart = "none", cotangent = "exact"))))
+        nn = nnControl(mode = "iter", rounds = rounds[[est]], wSteps = 1L, lr = 0.03,
+                       seed = 5L, warmStart = "none", cotangent = "exact"))))
     expect_true(is.finite(f$objf))
     ebes <- setNames(f$eta$eta.nn, f$eta$ID)
     expect_gt(abs(cor(ebes[order(as.integer(names(ebes)))], etaTrue)), 0.5)

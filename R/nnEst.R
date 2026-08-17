@@ -19,14 +19,54 @@
 }
 
 ## Per-observation error-model cotangent capture (nlmixr2est likelihood-contribution
-## hook).  .nnCapReset(TRUE) clears + arms it before an inner fit; .nnCapGet()
-## returns list(id, k, dLLdf) of the fit's converged per-obs cotangents.  No-op on
-## an nlmixr2est without the lik-contrib API.
-.nnCapReset <- function(on) {
-  tryCatch(.Call("_nlmixr2nn_capReset", on, PACKAGE = "nlmixr2nn"), error = function(e) NULL)
+## hook).  .nnCapReset(TRUE, nId, kStride) sizes + arms it before an inner fit;
+## .nnCapGet() returns list(id, k, dLLdf) of the fit's converged per-obs
+## cotangents.  No-op on an nlmixr2est without the lik-contrib API.
+##
+## The store is sized HERE, from the data, because the hook runs inside
+## nlmixr2est's OpenMP region and must not allocate: it used to grow itself with
+## R_chk_realloc() from a worker thread, which is a data race on the buffer and
+## an R API call off the main thread.
+.nnCapReset <- function(on, nId = 1L, kStride = 1L) {
+  tryCatch(.Call("_nlmixr2nn_capReset", on, as.integer(nId), as.integer(kStride),
+                 PACKAGE = "nlmixr2nn"),
+           error = function(e) NULL)
 }
 .nnCapGet <- function() {
   tryCatch(.Call("_nlmixr2nn_capGet", PACKAGE = "nlmixr2nn"), error = function(e) NULL)
+}
+
+## Register every network at a given set of per-id bases.  The same three-line
+## loop appeared in half a dozen places, each an opportunity to bind the wrong
+## offset silently.
+.nnSetNetBases <- function(nets, bases) {
+  for (.net in nets) {
+    .b <- bases[[as.character(.net$id)]]
+    if (!is.null(.b) && !is.na(.b)) {
+      nnSetMeta(.net$id, .b, .net$K, .net$H, .net$act)
+    }
+  }
+  invisible()
+}
+
+## Per-network weight-block bases for the model a given estimator solves, or
+## NULL when that model cannot be built.
+.nnEstBases <- function(ui, est, aug) {
+  .p <- .nnEstSolveParams(ui, est)
+  if (is.null(.p)) return(NULL)
+  .b <- tryCatch(nnUpdate(ui, params = .p), error = function(e) NULL)
+  if (is.null(.b) || !nrow(.b)) return(NULL)
+  stats::setNames(.b$base, as.character(.b$id))
+}
+
+## Store dimensions for a dataset: subjects, and the largest number of
+## observations any one of them has.  These are exactly what the hook's
+## (id, k) indices are bounded by.
+.nnCapDims <- function(data, idCol, obs) {
+  .ids <- data[[idCol]][obs]
+  if (length(.ids) == 0L) return(list(nId = 1L, kStride = 1L))
+  list(nId = length(unique(.ids)),
+       kStride = max(as.integer(table(.ids))))
 }
 
 ## NN-in-ODE training engine (.nnRun) for the transparent nlmixr2nn workflow.
@@ -168,9 +208,19 @@
     .off <<- .off + .nWm
     .meta
   })
+  ## the endpoint's transformation, read from the ui's own predDf rather than
+  ## re-parsed from the model text -- the weight step needs its derivative to
+  ## chain a transformed-scale score onto natural-scale sensitivities
+  .pd <- tryCatch(ui$predDf, error = function(e) NULL)
+  .ep <- if (is.null(.pd) || !nrow(.pd)) {
+    list(transform = "untransformed", lambda = 1, trLow = 0, trHi = 1)
+  } else {
+    list(transform = as.character(.pd$transform[1L]),
+         lambda = .pd$lambda[1L], trLow = .pd$trLow[1L], trHi = .pd$trHi[1L])
+  }
   list(text = .augText, mAug = rxode2::rxode2(.augText),
        covMap = .covMap, realCovs = .realCovs, weights = .allW, nW = .totW,
-       endpoint = .end$state, errAdd = .end$add, errProp = .end$prop,
+       endpoint = .end$state, errAdd = .end$add, errProp = .end$prop, ep = .ep,
        predswCols = sprintf("rx_predsw_%d_", seq_len(.totW) - 1L),
        nets = .netMeta)
 }
@@ -225,7 +275,7 @@
   ## the per-observation error-model cotangent captured from the inner fit (the
   ## EXACT dLL/df for any residual model), aligned to the observation rows; NULL
   ## uses the closed-form additive/proportional-Gaussian cotangent.
-  function(ebes, errPar, thetas, dLLdfObs = NULL) {
+  function(ebes, errPar, thetas, dLLdfObs = NULL, step = TRUE) {
     .ad <- data
     for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- ebes[as.character(.ad[[idCol]])]
     for (.net in aug$nets) {                            # each net at its augmented base
@@ -242,19 +292,35 @@
     .f <- .s[[aug$endpoint]][.ik]
     .resid <- dv[obs] - .f
     if (!is.null(dLLdfObs)) {
-      .dLLdf <- dLLdfObs                               # exact cotangent from the inner fit
+      ## The captured score is d(LL)/d(TRANSFORMED prediction) -- transform-both-
+      ## sides is applied in rxode2's rx_pred_ statement, so the hook never sees
+      ## the natural scale.  `rx_sw` below are natural-scale sensitivities, so
+      ## the transformation's own derivative has to close the chain; without it
+      ## a lnorm/boxCox/logit endpoint trained on a gradient short by that factor
+      ## at every observation (R/nnEndpoint.R).
+      .dLLdf <- dLLdfObs
+      if (.nnNeedsTransformJac(aug$ep)) {
+        .dLLdf <- .dLLdf * .nnTransformJac(aug$ep, .f)
+      }
     } else {
       .R <- errPar$add^2 + (errPar$prop * .f)^2
       .dRdf <- 2 * errPar$prop^2 * .f
       .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
     }
+    ## `step = FALSE` assembles the gradient without moving the weights, which
+    ## is what lets the two cotangent sources be compared AT THE GRADIENT rather
+    ## than by running two whole fits and hoping the difference shows.
+    .grad <- list()
     for (.net in aug$nets) {                            # per-network gradient + step
       .dLLdw <- vapply(.net$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
-      nnTorchZeroGrad(.net$id)
-      nnTorchSetGrad(.net$id, -.dLLdw)
-      nnTorchStep(.net$id)
+      .grad[[as.character(.net$id)]] <- unname(.dLLdw)
+      if (step) {
+        nnTorchZeroGrad(.net$id)
+        nnTorchSetGrad(.net$id, -.dLLdw)
+        nnTorchStep(.net$id)
+      }
     }
-    sqrt(mean(.resid^2))
+    list(rmse = sqrt(mean(.resid^2)), f = .f, dLLdf = .dLLdf, dLLdw = .grad)
   }
 }
 
@@ -335,7 +401,7 @@
     nlmixr2est::nlmObjectiveSetup(ctx$ui, .dw, ctx$control))), error = function(e) NULL)
   if (is.null(.parIni)) return(NULL)
   on.exit(try(nlmixr2est::.nlmFreeEnv(), silent = TRUE), add = TRUE)
-  .nnCapReset(TRUE)
+  .nnCapReset(TRUE, ctx$capDims$nId, ctx$capDims$kStride)
   ## `:::` deliberately: nlmSolveR is internal to nlmixr2est.  It was written as
   ## `::`, which raises "not an exported object" -- and because that error was
   ## swallowed by the tryCatch below, this whole exact-cotangent path silently
@@ -343,7 +409,7 @@
   .obj <- tryCatch(nlmixr2est:::nlmSolveR(.parIni), error = function(e) NA_real_)
   .cap <- .nnCapGet(); .nnCapReset(FALSE)
   if (!is.finite(.obj) || is.null(.cap) || !length(.cap$id)) return(NULL)
-  .dLLdf <- .cap$dLLdf[match(ctx$obsKey, .cap$id * 1024L + .cap$k)]
+  .dLLdf <- .cap$dLLdf[match(ctx$obsKey, .cap$id * ctx$capStride + .cap$k)]
   if (anyNA(.dLLdf)) return(NULL)
   list(obj = 2 * .obj, dLLdf = .dLLdf)          # objf = -2LL = 2 * minimum
 }
@@ -581,10 +647,13 @@
 
   .aug <- .nnAugmentFromUi(.ui)
   .data <- nnCovData(.data)
-  ## each network's weight block sits at DIFFERENT par_ptr positions in the base vs
-  ## the augmented model, so the injection base is switched per context (base-model
-  ## base per network for the inner fit, augmented base for the sensitivity solve).
-  .baseInfo <- nnUpdate(.ui)
+  ## Each network's weight block sits at a DIFFERENT par_ptr offset in every
+  ## model involved -- the base ui, the model this estimator solves, and the
+  ## augmented sensitivity model -- so the registered offset is switched per
+  ## context.  The estimator's own model is the authority for the inner fit:
+  ## reading at another model's offset does not error, it evaluates a different
+  ## network (see .nnEstSolveParams).
+  .baseInfo <- nnUpdate(.ui, params = .nnEstSolveParams(.ui, .innerEst))
   .baseBases <- stats::setNames(.baseInfo$base, as.character(.baseInfo$id))
   ## init one torch module per network (seed offset so distinct nets differ)
   for (.i in seq_along(.aug$nets)) {
@@ -628,8 +697,20 @@
                       vapply(.cl, function(.c) as.character(.c$id), character(1)))
     }, error = function(e) NULL)
     if (!is.null(.inputsById)) {
-      ## the trial solve must see the current weights, so hand it a copy of the
-      ## data carrying them (the same route the inner fits use)
+      ## Bind the registry to the BASE model and push the current weights before
+      ## the trial solve.
+      ##
+      ## Filling the data columns is not enough on its own: the loader also
+      ## injects from its own buffer, and inside the loop `.nnEnv$training` is
+      ## TRUE, so the ui-prep hook does not rebind.  Without this the trial solve
+      ## ran against whatever the previous fit left in the buffer -- zeros in a
+      ## fresh session -- so the state trajectory, and therefore the derived
+      ## scale, differed from run to run.  That made whole fits irreproducible
+      ## under a fixed set.seed().
+      for (.net in .aug$nets) {
+        nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+        nnSetWeights(.net$id, nnTorchWeights(.net$id))
+      }
       .scales <- tryCatch(
         .nnInputScales(.ui, .nnFillWeightCols(.aug, .data), .aug$nets, .inputsById),
         error = function(e) NULL)
@@ -682,7 +763,13 @@
          "fit with nnControl(cotangent = \"exact\")", call. = FALSE)
   }
   .obsIdVals <- .data[[.idCol]][.obs]
-  .obsKey <- (match(.obsIdVals, unique(.obsIdVals)) - 1L) * 1024L +
+  ## The capture store's flat index is id * stride + k, and the SAME stride has
+  ## to be used on both sides -- it used to be the literal 1024 in three places
+  ## here and a #define in C, which silently dropped any subject with 1024+
+  ## observations.  It is now sized from this data set and threaded through.
+  .capDims <- .nnCapDims(.data, .idCol, .obs)
+  .capStride <- .capDims$kStride
+  .obsKey <- (match(.obsIdVals, unique(.obsIdVals)) - 1L) * .capStride +
     (stats::ave(seq_along(.obsIdVals), .obsIdVals, FUN = function(z) seq_along(z)) - 1L)
 
   ## true interleave only when the inner estimator exposes a partial outer step
@@ -828,7 +915,8 @@
     .fitUi <- if (.interleave) .curUi else .ui
     .roundCtl <- .innerCtl
     if (.interleave) .roundCtl[[.knob]] <- sched$outerPerRound
-    if (.exactSelf) .nnCapReset(TRUE)                        # self-capture during fit
+    ## self-capture during the fit; the store is sized from this data set
+    if (.exactSelf) .nnCapReset(TRUE, .capDims$nId, .capDims$kStride)
     .fit <- suppressWarnings(suppressMessages(
       nlmixr2est::nlmixr2(.fitUi, .dw, est = .innerEst, control = .roundCtl)))
     if (.interleave) .curUi <- .fit$ui                       # warm-start next round
@@ -839,15 +927,24 @@
     .dLLdfObs <- NULL; .ebeFit <- .fit
     if (.exact) {
       if (.exactPosthoc) {
-        .nnCapReset(TRUE)
+        ## This capture fit is FOCEi, whatever the round's estimator is -- so the
+        ## weight block has to be registered at FOCEi's offset for the duration,
+        ## not the outer estimator's.  Without this a SAEM round captured its
+        ## cotangents from a network read one slot off, and its eta recovery
+        ## collapsed while every assertion but one still passed.
+        .phBases <- .nnEstBases(.ui, "focei", .aug)
+        if (!is.null(.phBases)) .nnSetNetBases(.aug$nets, .phBases)
+        .nnCapReset(TRUE, .capDims$nId, .capDims$kStride)
         .ebeFit <- suppressWarnings(suppressMessages(
           nlmixr2est::nlmixr2(.fit$finalUi, .dw, est = "focei",
             nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 0L,
                                      maxInnerIterations = 30L, calcTables = FALSE))))
+        ## back to the round's estimator for everything after
+        .nnSetNetBases(.aug$nets, .baseBases)
       }
       .cap <- .nnCapGet(); .nnCapReset(FALSE)
       if (!is.null(.cap) && length(.cap$id)) {
-        .cand <- .cap$dLLdf[match(.obsKey, .cap$id * 1024L + .cap$k)]
+        .cand <- .cap$dLLdf[match(.obsKey, .cap$id * .capStride + .cap$k)]
         if (!anyNA(.cand)) .dLLdfObs <- .cand
       }
       if (is.null(.dLLdfObs) && is.na(.aug$errAdd) && is.na(.aug$errProp)) {
@@ -862,7 +959,9 @@
     .thetas <- .fit$theta
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
                     prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
-    for (.ws in seq_len(sched$wSteps)) .rmse <- .weightStep(.ebes, .errPar, .thetas, .dLLdfObs)
+    for (.ws in seq_len(sched$wSteps)) {
+      .rmse <- .weightStep(.ebes, .errPar, .thetas, .dLLdfObs)$rmse
+    }
     .wNow <- .nnAllTorchWeights(.aug)
     .wChange <- sqrt(sum((.wNow - .wPrev)^2)) / (sqrt(sum(.wPrev^2)) + 1e-8)
     .wPrev <- .wNow

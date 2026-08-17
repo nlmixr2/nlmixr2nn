@@ -4,11 +4,14 @@
 \alias{nnUpdate}
 \title{Register generated networks' weight-block layout for solving}
 \usage{
-nnUpdate(x)
+nnUpdate(x, params = NULL)
 }
 \arguments{
 \item{x}{an rxode2 model / ui object, or a character vector of parameter
 names in solve order.}
+
+\item{params}{parameter order of the model that will be solved, when the
+caller knows it; reconstructed from `x` when `NULL`.}
 }
 \value{
 invisibly, a data.frame of the registered networks.

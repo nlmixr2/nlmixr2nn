@@ -200,7 +200,12 @@ test_that("iterative nn training works under a proportional error model", {
     nlmixr2est::nlmixr2(modP, nnCovData(data), "focei",
       nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 8L,
                                maxInnerIterations = 25L, calcTables = FALSE),
-      nn = nnControl(mode = "iter", rounds = 5L, wSteps = 8L, lr = 0.03, seed = 5L))))
+      ## `seed=` is deliberately absent: initialization is now decided when the
+      ## model is PARSED, so nnControl(seed=) no longer affects it.  30 rounds
+      ## rather than 5 because the run is not converged at 5 -- eta correlation
+      ## 0.53 with the rmse still falling (1.66 -> 1.24); by 30 it is 0.998 at
+      ## rmse 0.62.  The old budget was tuned to the old initialization.
+      nn = nnControl(mode = "iter", rounds = 30L, wSteps = 8L, lr = 0.03))))
 
   ## the proportional-error Gaussian cotangent trains the network + recovers IIV
   expect_true(is.finite(f$objf))
