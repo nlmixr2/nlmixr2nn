@@ -947,10 +947,20 @@
         .cand <- .cap$dLLdf[match(.obsKey, .cap$id * .capStride + .cap$k)]
         if (!anyNA(.cand)) .dLLdfObs <- .cand
       }
-      if (is.null(.dLLdfObs) && is.na(.aug$errAdd) && is.na(.aug$errProp)) {
-        stop(sprintf(paste0("nlmixr2nn: cotangent=\"exact\" captured no per-observation ",
-             "cotangents (est=\"%s\"); a non-add()/prop() error model needs the ",
-             "FOCEi contribution hook"), .innerEst), call. = FALSE)
+      ## Capture failed.  Falling back to the closed form is only safe where the
+      ## closed form is the right score for this endpoint; on a transformed one
+      ## it is a different function, and using it would train on the wrong
+      ## gradient without saying so.
+      if (is.null(.dLLdfObs) &&
+            !.nnCanUseClosedForm(.aug$ep, .aug$errAdd, .aug$errProp)) {
+        stop(sprintf(paste0(
+          "nlmixr2nn: cotangent=\"exact\" captured no per-observation cotangents ",
+          "(est=\"%s\", endpoint transformation '%s').  There is no closed-form ",
+          "score to fall back to for this endpoint, and using the ",
+          "additive/proportional one would silently train on a different ",
+          "gradient."), .innerEst,
+          if (is.null(.aug$ep$transform)) "untransformed" else .aug$ep$transform),
+          call. = FALSE)
       }
     }
     .ebes <- if (.hasEta) {
