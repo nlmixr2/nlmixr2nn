@@ -15,7 +15,7 @@ extern SEXP _nlmixr2nn_iniLikContrib(SEXP);
 extern SEXP _nlmixr2nn_registerContrib(void);
 extern SEXP _nlmixr2nn_removeContrib(void);
 extern SEXP _nlmixr2nn_getContrib(void);
-extern SEXP _nlmixr2nn_capReset(SEXP);
+extern SEXP _nlmixr2nn_capReset(SEXP, SEXP, SEXP);
 extern SEXP _nlmixr2nn_capGet(void);
 
 /* probe (validation) */
@@ -76,7 +76,7 @@ void R_init_nlmixr2nn(DllInfo *dll) {
     {"_nlmixr2nn_registerContrib",(DL_FUNC) &_nlmixr2nn_registerContrib,0},
     {"_nlmixr2nn_removeContrib",(DL_FUNC) &_nlmixr2nn_removeContrib,0},
     {"_nlmixr2nn_getContrib",(DL_FUNC) &_nlmixr2nn_getContrib,0},
-    {"_nlmixr2nn_capReset",(DL_FUNC) &_nlmixr2nn_capReset,1},
+    {"_nlmixr2nn_capReset",(DL_FUNC) &_nlmixr2nn_capReset,3},
     {"_nlmixr2nn_capGet",(DL_FUNC) &_nlmixr2nn_capGet,0},
     {"_nlmixr2nn_nnTorchProbe",(DL_FUNC) &_nlmixr2nn_nnTorchProbe,1},
     {"_nlmixr2nn_nnTorchAvailable",(DL_FUNC) &_nlmixr2nn_nnTorchAvailable,0},

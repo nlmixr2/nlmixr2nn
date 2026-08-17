@@ -19,14 +19,31 @@
 }
 
 ## Per-observation error-model cotangent capture (nlmixr2est likelihood-contribution
-## hook).  .nnCapReset(TRUE) clears + arms it before an inner fit; .nnCapGet()
-## returns list(id, k, dLLdf) of the fit's converged per-obs cotangents.  No-op on
-## an nlmixr2est without the lik-contrib API.
-.nnCapReset <- function(on) {
-  tryCatch(.Call("_nlmixr2nn_capReset", on, PACKAGE = "nlmixr2nn"), error = function(e) NULL)
+## hook).  .nnCapReset(TRUE, nId, kStride) sizes + arms it before an inner fit;
+## .nnCapGet() returns list(id, k, dLLdf) of the fit's converged per-obs
+## cotangents.  No-op on an nlmixr2est without the lik-contrib API.
+##
+## The store is sized HERE, from the data, because the hook runs inside
+## nlmixr2est's OpenMP region and must not allocate: it used to grow itself with
+## R_chk_realloc() from a worker thread, which is a data race on the buffer and
+## an R API call off the main thread.
+.nnCapReset <- function(on, nId = 1L, kStride = 1L) {
+  tryCatch(.Call("_nlmixr2nn_capReset", on, as.integer(nId), as.integer(kStride),
+                 PACKAGE = "nlmixr2nn"),
+           error = function(e) NULL)
 }
 .nnCapGet <- function() {
   tryCatch(.Call("_nlmixr2nn_capGet", PACKAGE = "nlmixr2nn"), error = function(e) NULL)
+}
+
+## Store dimensions for a dataset: subjects, and the largest number of
+## observations any one of them has.  These are exactly what the hook's
+## (id, k) indices are bounded by.
+.nnCapDims <- function(data, idCol, obs) {
+  .ids <- data[[idCol]][obs]
+  if (length(.ids) == 0L) return(list(nId = 1L, kStride = 1L))
+  list(nId = length(unique(.ids)),
+       kStride = max(as.integer(table(.ids))))
 }
 
 ## NN-in-ODE training engine (.nnRun) for the transparent nlmixr2nn workflow.
@@ -335,7 +352,7 @@
     nlmixr2est::nlmObjectiveSetup(ctx$ui, .dw, ctx$control))), error = function(e) NULL)
   if (is.null(.parIni)) return(NULL)
   on.exit(try(nlmixr2est::.nlmFreeEnv(), silent = TRUE), add = TRUE)
-  .nnCapReset(TRUE)
+  .nnCapReset(TRUE, ctx$capDims$nId, ctx$capDims$kStride)
   ## `:::` deliberately: nlmSolveR is internal to nlmixr2est.  It was written as
   ## `::`, which raises "not an exported object" -- and because that error was
   ## swallowed by the tryCatch below, this whole exact-cotangent path silently
@@ -343,7 +360,7 @@
   .obj <- tryCatch(nlmixr2est:::nlmSolveR(.parIni), error = function(e) NA_real_)
   .cap <- .nnCapGet(); .nnCapReset(FALSE)
   if (!is.finite(.obj) || is.null(.cap) || !length(.cap$id)) return(NULL)
-  .dLLdf <- .cap$dLLdf[match(ctx$obsKey, .cap$id * 1024L + .cap$k)]
+  .dLLdf <- .cap$dLLdf[match(ctx$obsKey, .cap$id * ctx$capStride + .cap$k)]
   if (anyNA(.dLLdf)) return(NULL)
   list(obj = 2 * .obj, dLLdf = .dLLdf)          # objf = -2LL = 2 * minimum
 }
@@ -628,8 +645,20 @@
                       vapply(.cl, function(.c) as.character(.c$id), character(1)))
     }, error = function(e) NULL)
     if (!is.null(.inputsById)) {
-      ## the trial solve must see the current weights, so hand it a copy of the
-      ## data carrying them (the same route the inner fits use)
+      ## Bind the registry to the BASE model and push the current weights before
+      ## the trial solve.
+      ##
+      ## Filling the data columns is not enough on its own: the loader also
+      ## injects from its own buffer, and inside the loop `.nnEnv$training` is
+      ## TRUE, so the ui-prep hook does not rebind.  Without this the trial solve
+      ## ran against whatever the previous fit left in the buffer -- zeros in a
+      ## fresh session -- so the state trajectory, and therefore the derived
+      ## scale, differed from run to run.  That made whole fits irreproducible
+      ## under a fixed set.seed().
+      for (.net in .aug$nets) {
+        nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+        nnSetWeights(.net$id, nnTorchWeights(.net$id))
+      }
       .scales <- tryCatch(
         .nnInputScales(.ui, .nnFillWeightCols(.aug, .data), .aug$nets, .inputsById),
         error = function(e) NULL)
@@ -682,7 +711,13 @@
          "fit with nnControl(cotangent = \"exact\")", call. = FALSE)
   }
   .obsIdVals <- .data[[.idCol]][.obs]
-  .obsKey <- (match(.obsIdVals, unique(.obsIdVals)) - 1L) * 1024L +
+  ## The capture store's flat index is id * stride + k, and the SAME stride has
+  ## to be used on both sides -- it used to be the literal 1024 in three places
+  ## here and a #define in C, which silently dropped any subject with 1024+
+  ## observations.  It is now sized from this data set and threaded through.
+  .capDims <- .nnCapDims(.data, .idCol, .obs)
+  .capStride <- .capDims$kStride
+  .obsKey <- (match(.obsIdVals, unique(.obsIdVals)) - 1L) * .capStride +
     (stats::ave(seq_along(.obsIdVals), .obsIdVals, FUN = function(z) seq_along(z)) - 1L)
 
   ## true interleave only when the inner estimator exposes a partial outer step
@@ -828,7 +863,8 @@
     .fitUi <- if (.interleave) .curUi else .ui
     .roundCtl <- .innerCtl
     if (.interleave) .roundCtl[[.knob]] <- sched$outerPerRound
-    if (.exactSelf) .nnCapReset(TRUE)                        # self-capture during fit
+    ## self-capture during the fit; the store is sized from this data set
+    if (.exactSelf) .nnCapReset(TRUE, .capDims$nId, .capDims$kStride)
     .fit <- suppressWarnings(suppressMessages(
       nlmixr2est::nlmixr2(.fitUi, .dw, est = .innerEst, control = .roundCtl)))
     if (.interleave) .curUi <- .fit$ui                       # warm-start next round
@@ -839,7 +875,7 @@
     .dLLdfObs <- NULL; .ebeFit <- .fit
     if (.exact) {
       if (.exactPosthoc) {
-        .nnCapReset(TRUE)
+        .nnCapReset(TRUE, .capDims$nId, .capDims$kStride)
         .ebeFit <- suppressWarnings(suppressMessages(
           nlmixr2est::nlmixr2(.fit$finalUi, .dw, est = "focei",
             nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 0L,
@@ -847,7 +883,7 @@
       }
       .cap <- .nnCapGet(); .nnCapReset(FALSE)
       if (!is.null(.cap) && length(.cap$id)) {
-        .cand <- .cap$dLLdf[match(.obsKey, .cap$id * 1024L + .cap$k)]
+        .cand <- .cap$dLLdf[match(.obsKey, .cap$id * .capStride + .cap$k)]
         if (!anyNA(.cand)) .dLLdfObs <- .cand
       }
       if (is.null(.dLLdfObs) && is.na(.aug$errAdd) && is.na(.aug$errProp)) {
