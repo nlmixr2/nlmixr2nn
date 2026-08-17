@@ -156,14 +156,19 @@ nnCovData <- function(data) {
 #' order, then covariates.  This uses the model `iniDf` theta order when
 #' available, and otherwise the declared parameter order (raw rxode2 models).
 #'
+#' @param params parameter order of the model that will be solved, when the
+#'   caller knows it; reconstructed from `x` when `NULL`.
 #' @param x an rxode2 model / ui object, or a character vector of parameter
 #'   names in solve order.
 #' @return invisibly, a data.frame of the registered networks.
 #' @keywords internal
-nnUpdate <- function(x) {
+nnUpdate <- function(x, params = NULL) {
   reg <- .nnEnv$reg
   if (length(reg) == 0L) return(invisible(data.frame()))
-  params <- .nnSolveParams(x)
+  ## `params` lets a caller that KNOWS which model will be solved supply its
+  ## parameter order; without it the layout is reconstructed, which is only a
+  ## fallback (see .nnEstSolveParams).
+  if (is.null(params)) params <- .nnSolveParams(x)
   iniEst <- .nnIniEst(x)
   info <- lapply(reg, function(m) {
     idx <- match(m$weights, params)
@@ -212,14 +217,6 @@ nnWithLoader <- function(expr) {
 ## parameter names in solve (par_ptr) order
 .nnSolveParams <- function(x) {
   if (is.character(x)) return(x)
-  ## Prefer the model that is ACTUALLY solved during an estimation.  A guess at
-  ## the layout is not good enough: the weight block sits at a different offset
-  ## in the base model, in FOCEi's inner model, and in this reconstruction, and
-  ## reading at the wrong offset does not fail loudly -- it silently evaluates a
-  ## different network, which is exactly what it used to do.
-  .inner <- tryCatch(x$foceiModel$inner, error = function(e) NULL)
-  .p <- tryCatch(rxode2::rxModelVars(.inner)$params, error = function(e) NULL)
-  if (!is.null(.p) && length(.p) > 0L) return(.p)
   ini <- .nnIniDf(x)
   if (!is.null(ini)) {
     th <- ini[!is.na(ini$ntheta), , drop = FALSE]
@@ -232,6 +229,33 @@ nnWithLoader <- function(expr) {
     return(c(th$name, .etas, covs))
   }
   rxode2::rxModelVars(x)$params
+}
+
+## Parameter order of the model a given ESTIMATOR actually solves.
+##
+## This has to be estimator-aware, and getting it wrong is silent.  The weight
+## block sits at a different offset in each of these, for the same model:
+##
+##   base ui             weights at 1..13   (base 0)
+##   saemModel           weights at 2..14   (base 1)
+##   foceiModel$inner    weights at 3..15   (base 2)
+##
+## Registering the wrong one does not error -- the evaluator simply reads a
+## different stretch of the parameter vector and computes a different network.
+## Returns NULL when the estimator's model cannot be built, and the caller falls
+## back to `.nnSolveParams()`.
+.nnEstSolveParams <- function(ui, est) {
+  .quiet <- function(e) suppressWarnings(suppressMessages(tryCatch(e, error = function(x) NULL)))
+  .p <- NULL
+  if (est %in% c("saem", "fsaem")) {
+    .p <- .quiet(rxode2::rxModelVars(ui$saemModel)$params)
+  } else if (!(est %in% .nnNlmOptimizers)) {
+    ## the FOCEi family and everything built on it (laplace/agq/emvi/fbvi/vae,
+    ## and the importance samplers, which all evaluate the FOCEi inner model)
+    .p <- .quiet(rxode2::rxModelVars(ui$foceiModel$inner)$params)
+  }
+  if (is.null(.p) || length(.p) == 0L) return(NULL)
+  .p
 }
 
 ## current weight values keyed by name (from the model iniDf), or NULL

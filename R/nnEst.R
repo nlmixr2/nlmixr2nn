@@ -598,10 +598,13 @@
 
   .aug <- .nnAugmentFromUi(.ui)
   .data <- nnCovData(.data)
-  ## each network's weight block sits at DIFFERENT par_ptr positions in the base vs
-  ## the augmented model, so the injection base is switched per context (base-model
-  ## base per network for the inner fit, augmented base for the sensitivity solve).
-  .baseInfo <- nnUpdate(.ui)
+  ## Each network's weight block sits at a DIFFERENT par_ptr offset in every
+  ## model involved -- the base ui, the model this estimator solves, and the
+  ## augmented sensitivity model -- so the registered offset is switched per
+  ## context.  The estimator's own model is the authority for the inner fit:
+  ## reading at another model's offset does not error, it evaluates a different
+  ## network (see .nnEstSolveParams).
+  .baseInfo <- nnUpdate(.ui, params = .nnEstSolveParams(.ui, .innerEst))
   .baseBases <- stats::setNames(.baseInfo$base, as.character(.baseInfo$id))
   ## init one torch module per network (seed offset so distinct nets differ)
   for (.i in seq_along(.aug$nets)) {

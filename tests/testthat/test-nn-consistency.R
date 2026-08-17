@@ -33,21 +33,27 @@ test_that("a plain solve evaluates exactly the network its weights describe", {
   expect_gt(diff(range(s$g)), 1e-6)
 })
 
-test_that("the weight-block base matches the model that is actually solved", {
+test_that("the weight-block base is resolved per ESTIMATOR", {
+  ## Each estimator solves a different model, and the same weight block sits at
+  ## a different offset in each.  Hardcoding one estimator's layout is not a fix,
+  ## it just moves which estimator is wrong -- that is exactly what happened when
+  ## FOCEi's inner model was used unconditionally and SAEM's eta recovery fell to
+  ## 0.09.
   skip_if_not_installed("rxode2")
   skip_if_no_est()
   local_nn()
-  m <- nnModUde()
   set.seed(7)
-  ui <- suppressWarnings(suppressMessages(rxode2::rxode2(m)))
+  ui <- suppressWarnings(suppressMessages(rxode2::rxode2(nnModUde())))
   u <- rxode2::rxUiDecompress(ui)
   wn <- u$nnMeta[["0"]]$weights
 
-  ## the offset the registry is given...
-  registered <- .nnSolveParams(ui)
-  ## ...must be the offset in the model an estimation actually solves
-  inner <- suppressWarnings(suppressMessages(u$foceiModel$inner))
-  expect_equal(match(wn, registered), match(wn, rxode2::rxModelVars(inner)$params))
+  focei <- suppressWarnings(suppressMessages(rxode2::rxModelVars(u$foceiModel$inner)$params))
+  saem  <- suppressWarnings(suppressMessages(rxode2::rxModelVars(u$saemModel)$params))
+  ## the premise: they really do differ, so this test is not vacuous
+  expect_false(identical(match(wn, focei), match(wn, saem)))
+
+  expect_equal(match(wn, .nnEstSolveParams(ui, "focei")), match(wn, focei))
+  expect_equal(match(wn, .nnEstSolveParams(ui, "saem")), match(wn, saem))
 })
 
 test_that("a fit evaluates the network its trained weights describe", {
