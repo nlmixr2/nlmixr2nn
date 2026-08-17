@@ -4,7 +4,7 @@
 \alias{nnUpdate}
 \title{Register generated networks' weight-block layout for solving}
 \usage{
-nnUpdate(x)
+nnUpdate(x, params = NULL)
 }
 \arguments{
 \item{x}{an rxode2 model / ui object, or a character vector of parameter
