@@ -87,6 +87,19 @@
   }
 
   ## ---- the schedule ---------------------------------------------------------
+  ## Cotangent source: the closed form where it applies, the exact score
+  ## otherwise.  This is a decision, not a stopgap.
+  ##
+  ## The exact score is evaluated at the inner fit's own prediction, while the
+  ## sensitivities it multiplies come from the augmented solve -- and those two
+  ## predictions differ by ~4.5e-04 relative at identical EBEs.  Mixing them is
+  ## less self-consistent than the closed form, which takes the score and the
+  ## sensitivities from the SAME solve.  (Measured; the augmentation itself
+  ## perturbs the trajectory by only ~5e-09, so it is not the cause.)
+  ##
+  ## So the exact score is not "better and pending"; it earns its place on the
+  ## endpoints the closed form cannot express -- transformed and non-Gaussian --
+  ## and is used exactly there.  See test-nn-cotangent-agree.R.
   .cot <- if (.ep$closedForm) "gaussian" else "exact"
   .s <- list(
     mode = "iter", tol = 1e-3, outerPerRound = 1L,
