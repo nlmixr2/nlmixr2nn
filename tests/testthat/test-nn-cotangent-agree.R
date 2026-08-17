@@ -44,21 +44,29 @@ test_that("exact and Gaussian cotangents give the SAME weight gradient", {
                             warmStart = "none", cotangent = "gaussian"))
 
   ## On an untransformed add() endpoint the exact score IS the Gaussian score,
-  ## so one round from the same start lands in the same place -- but NOT to
-  ## machine precision.  Measured, the weights agree to about 0.3% and the
-  ## round's rmse to about 0.03%.
+  ## so one round from an identical start lands in the same place -- but NOT to
+  ## machine precision.  Measured: weights agree to about 0.3%, rmse to 0.03%.
   ##
-  ## That residual is NOT explained yet, and it is the reason "exact" is still
-  ## not the default for endpoints where the closed form applies.  Two candidate
-  ## causes, neither confirmed: the captured score is taken at the INNER model's
-  ## prediction while the closed form is recomputed from the augmented model's,
-  ## and arming the capture hook is not provably inert with respect to the fit.
-  ## Until one of those is demonstrated, defaulting to the exact score would
-  ## change the answer of every Gaussian fit by an amount nobody has accounted
-  ## for.
+  ## The cause, measured rather than guessed: FOCEi's own prediction and the
+  ## augmented solve's prediction at the SAME EBEs differ by ~4.5e-04 relative.
+  ## (Augmentation itself is not responsible -- adding the sensitivity states
+  ## changes the base trajectory by only ~5e-09.)  So the two paths are not
+  ## evaluating the score at the same point:
   ##
-  ## The tolerance here therefore records a MEASUREMENT, not a claim of
-  ## equivalence: it is wide enough to pass today and tight enough to fail if
+  ##   exact        score at FOCEi's prediction  x  sensitivities from the
+  ##                augmented solve              <- mixes two solves
+  ##   closed form  score and sensitivities both from the augmented solve
+  ##
+  ## and the score is resid/R, which amplifies a small shift in f wherever the
+  ## residual is small; one Adam step turns that into the 0.3%.
+  ##
+  ## That is the argument for keeping the closed form as the default WHERE IT
+  ## APPLIES: it is internally consistent, using one solve for both factors.
+  ## The exact score earns its place on endpoints the closed form cannot express
+  ## -- transformed and non-Gaussian -- which is exactly where it is used.
+  ##
+  ## The tolerances below therefore record a MEASUREMENT, not a claim of
+  ## equivalence: wide enough for the known mismatch, tight enough to fail if
   ## the two paths ever diverge materially.
   expect_equal(unname(f$nnWeights), unname(g$nnWeights), tolerance = 1e-2)
   expect_equal(ph$rmse[1L], g$nnParHist$rmse[1L], tolerance = 1e-3)
