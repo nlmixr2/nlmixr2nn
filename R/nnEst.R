@@ -275,7 +275,7 @@
   ## the per-observation error-model cotangent captured from the inner fit (the
   ## EXACT dLL/df for any residual model), aligned to the observation rows; NULL
   ## uses the closed-form additive/proportional-Gaussian cotangent.
-  function(ebes, errPar, thetas, dLLdfObs = NULL) {
+  function(ebes, errPar, thetas, dLLdfObs = NULL, step = TRUE) {
     .ad <- data
     for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- ebes[as.character(.ad[[idCol]])]
     for (.net in aug$nets) {                            # each net at its augmented base
@@ -307,13 +307,20 @@
       .dRdf <- 2 * errPar$prop^2 * .f
       .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
     }
+    ## `step = FALSE` assembles the gradient without moving the weights, which
+    ## is what lets the two cotangent sources be compared AT THE GRADIENT rather
+    ## than by running two whole fits and hoping the difference shows.
+    .grad <- list()
     for (.net in aug$nets) {                            # per-network gradient + step
       .dLLdw <- vapply(.net$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
-      nnTorchZeroGrad(.net$id)
-      nnTorchSetGrad(.net$id, -.dLLdw)
-      nnTorchStep(.net$id)
+      .grad[[as.character(.net$id)]] <- unname(.dLLdw)
+      if (step) {
+        nnTorchZeroGrad(.net$id)
+        nnTorchSetGrad(.net$id, -.dLLdw)
+        nnTorchStep(.net$id)
+      }
     }
-    sqrt(mean(.resid^2))
+    list(rmse = sqrt(mean(.resid^2)), f = .f, dLLdf = .dLLdf, dLLdw = .grad)
   }
 }
 
@@ -952,7 +959,9 @@
     .thetas <- .fit$theta
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
                     prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
-    for (.ws in seq_len(sched$wSteps)) .rmse <- .weightStep(.ebes, .errPar, .thetas, .dLLdfObs)
+    for (.ws in seq_len(sched$wSteps)) {
+      .rmse <- .weightStep(.ebes, .errPar, .thetas, .dLLdfObs)$rmse
+    }
     .wNow <- .nnAllTorchWeights(.aug)
     .wChange <- sqrt(sum((.wNow - .wPrev)^2)) / (sqrt(sum(.wPrev^2)) + 1e-8)
     .wPrev <- .wNow
