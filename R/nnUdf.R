@@ -212,13 +212,24 @@ nnWithLoader <- function(expr) {
 ## parameter names in solve (par_ptr) order
 .nnSolveParams <- function(x) {
   if (is.character(x)) return(x)
+  ## Prefer the model that is ACTUALLY solved during an estimation.  A guess at
+  ## the layout is not good enough: the weight block sits at a different offset
+  ## in the base model, in FOCEi's inner model, and in this reconstruction, and
+  ## reading at the wrong offset does not fail loudly -- it silently evaluates a
+  ## different network, which is exactly what it used to do.
+  .inner <- tryCatch(x$foceiModel$inner, error = function(e) NULL)
+  .p <- tryCatch(rxode2::rxModelVars(.inner)$params, error = function(e) NULL)
+  if (!is.null(.p) && length(.p) > 0L) return(.p)
   ini <- .nnIniDf(x)
   if (!is.null(ini)) {
     th <- ini[!is.na(ini$ntheta), , drop = FALSE]
     th <- th[order(th$ntheta), , drop = FALSE]
+    ## the etas sit between the thetas and the covariates; leaving them out
+    ## shifted the whole weight block down by the number of random effects
+    .etas <- tryCatch(x$eta, error = function(e) character(0))
     mv <- rxode2::rxModelVars(x)
-    covs <- setdiff(mv$params, th$name)   # covariates follow the thetas
-    return(c(th$name, covs))
+    covs <- setdiff(mv$params, c(th$name, .etas))
+    return(c(th$name, .etas, covs))
   }
   rxode2::rxModelVars(x)$params
 }
