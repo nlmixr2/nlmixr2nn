@@ -208,9 +208,19 @@
     .off <<- .off + .nWm
     .meta
   })
+  ## the endpoint's transformation, read from the ui's own predDf rather than
+  ## re-parsed from the model text -- the weight step needs its derivative to
+  ## chain a transformed-scale score onto natural-scale sensitivities
+  .pd <- tryCatch(ui$predDf, error = function(e) NULL)
+  .ep <- if (is.null(.pd) || !nrow(.pd)) {
+    list(transform = "untransformed", lambda = 1, trLow = 0, trHi = 1)
+  } else {
+    list(transform = as.character(.pd$transform[1L]),
+         lambda = .pd$lambda[1L], trLow = .pd$trLow[1L], trHi = .pd$trHi[1L])
+  }
   list(text = .augText, mAug = rxode2::rxode2(.augText),
        covMap = .covMap, realCovs = .realCovs, weights = .allW, nW = .totW,
-       endpoint = .end$state, errAdd = .end$add, errProp = .end$prop,
+       endpoint = .end$state, errAdd = .end$add, errProp = .end$prop, ep = .ep,
        predswCols = sprintf("rx_predsw_%d_", seq_len(.totW) - 1L),
        nets = .netMeta)
 }
@@ -282,7 +292,16 @@
     .f <- .s[[aug$endpoint]][.ik]
     .resid <- dv[obs] - .f
     if (!is.null(dLLdfObs)) {
-      .dLLdf <- dLLdfObs                               # exact cotangent from the inner fit
+      ## The captured score is d(LL)/d(TRANSFORMED prediction) -- transform-both-
+      ## sides is applied in rxode2's rx_pred_ statement, so the hook never sees
+      ## the natural scale.  `rx_sw` below are natural-scale sensitivities, so
+      ## the transformation's own derivative has to close the chain; without it
+      ## a lnorm/boxCox/logit endpoint trained on a gradient short by that factor
+      ## at every observation (R/nnEndpoint.R).
+      .dLLdf <- dLLdfObs
+      if (.nnNeedsTransformJac(aug$ep)) {
+        .dLLdf <- .dLLdf * .nnTransformJac(aug$ep, .f)
+      }
     } else {
       .R <- errPar$add^2 + (errPar$prop * .f)^2
       .dRdf <- 2 * errPar$prop^2 * .f
