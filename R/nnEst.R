@@ -36,6 +36,29 @@
   tryCatch(.Call("_nlmixr2nn_capGet", PACKAGE = "nlmixr2nn"), error = function(e) NULL)
 }
 
+## Register every network at a given set of per-id bases.  The same three-line
+## loop appeared in half a dozen places, each an opportunity to bind the wrong
+## offset silently.
+.nnSetNetBases <- function(nets, bases) {
+  for (.net in nets) {
+    .b <- bases[[as.character(.net$id)]]
+    if (!is.null(.b) && !is.na(.b)) {
+      nnSetMeta(.net$id, .b, .net$K, .net$H, .net$act)
+    }
+  }
+  invisible()
+}
+
+## Per-network weight-block bases for the model a given estimator solves, or
+## NULL when that model cannot be built.
+.nnEstBases <- function(ui, est, aug) {
+  .p <- .nnEstSolveParams(ui, est)
+  if (is.null(.p)) return(NULL)
+  .b <- tryCatch(nnUpdate(ui, params = .p), error = function(e) NULL)
+  if (is.null(.b) || !nrow(.b)) return(NULL)
+  stats::setNames(.b$base, as.character(.b$id))
+}
+
 ## Store dimensions for a dataset: subjects, and the largest number of
 ## observations any one of them has.  These are exactly what the hook's
 ## (id, k) indices are bounded by.
@@ -878,11 +901,20 @@
     .dLLdfObs <- NULL; .ebeFit <- .fit
     if (.exact) {
       if (.exactPosthoc) {
+        ## This capture fit is FOCEi, whatever the round's estimator is -- so the
+        ## weight block has to be registered at FOCEi's offset for the duration,
+        ## not the outer estimator's.  Without this a SAEM round captured its
+        ## cotangents from a network read one slot off, and its eta recovery
+        ## collapsed while every assertion but one still passed.
+        .phBases <- .nnEstBases(.ui, "focei", .aug)
+        if (!is.null(.phBases)) .nnSetNetBases(.aug$nets, .phBases)
         .nnCapReset(TRUE, .capDims$nId, .capDims$kStride)
         .ebeFit <- suppressWarnings(suppressMessages(
           nlmixr2est::nlmixr2(.fit$finalUi, .dw, est = "focei",
             nlmixr2est::foceiControl(print = 0L, maxOuterIterations = 0L,
                                      maxInnerIterations = 30L, calcTables = FALSE))))
+        ## back to the round's estimator for everything after
+        .nnSetNetBases(.aug$nets, .baseBases)
       }
       .cap <- .nnCapGet(); .nnCapReset(FALSE)
       if (!is.null(.cap) && length(.cap$id)) {
