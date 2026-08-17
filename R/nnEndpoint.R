@@ -100,6 +100,21 @@
   .j
 }
 
+## Is the closed-form additive/proportional Gaussian score VALID for this
+## endpoint?
+##
+## This is the question the exact path's failure handling has to ask.  Falling
+## back to the closed form is only safe where the closed form is actually the
+## right score -- an untransformed endpoint with an add()/prop() term.  On a
+## TRANSFORMED endpoint the closed form is a different function, so falling back
+## to it silently trains on the wrong gradient, which is the failure mode this
+## whole file exists to prevent.  Previously the fallback was refused only when
+## add() and prop() were both absent, which let `boxCox + add()` through.
+.nnCanUseClosedForm <- function(ep, errAdd, errProp) {
+  if (.nnNeedsTransformJac(ep)) return(FALSE)
+  !(is.na(errAdd) && is.na(errProp))
+}
+
 ## Does this endpoint need the Jacobian at all?  An untransformed endpoint is
 ## the common case and costs nothing to skip.
 .nnNeedsTransformJac <- function(ep) {

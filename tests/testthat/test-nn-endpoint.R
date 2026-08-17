@@ -85,3 +85,23 @@ test_that("boxCox at lambda 0 is the log transform", {
   y <- c(0.5, 1.5, 4)
   expect_equal(.nnTransformJac(list(transform = "boxCox", lambda = 0), y), 1 / y)
 })
+
+## When the exact score cannot be captured, is falling back to the closed form
+## safe?  Only where the closed form is actually this endpoint's score.
+test_that("the closed form is only offered as a fallback where it is valid", {
+  ## untransformed with an error term: the closed form IS the right score
+  expect_true(.nnCanUseClosedForm(list(transform = "untransformed"), "add.sd", NA))
+  expect_true(.nnCanUseClosedForm(list(transform = "untransformed"), NA, "prop.sd"))
+  expect_true(.nnCanUseClosedForm(list(), "add.sd", "prop.sd"))
+
+  ## untransformed but no add()/prop(): nothing to fall back to
+  expect_false(.nnCanUseClosedForm(list(transform = "untransformed"), NA, NA))
+
+  ## TRANSFORMED, even with add(): the closed form is a DIFFERENT function, so
+  ## falling back to it would silently train on the wrong gradient.  This is the
+  ## case the old guard let through -- it only refused when add and prop were
+  ## both absent.
+  expect_false(.nnCanUseClosedForm(list(transform = "lnorm"), "add.sd", NA))
+  expect_false(.nnCanUseClosedForm(list(transform = "boxCox"), "add.sd", "prop.sd"))
+  expect_false(.nnCanUseClosedForm(list(transform = "logit + yeoJohnson"), "add.sd", NA))
+})
