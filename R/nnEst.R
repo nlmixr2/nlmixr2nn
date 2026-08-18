@@ -202,6 +202,31 @@
          "' does not depend on any ODE state, nor on the network directly -- ",
          "nothing for the network to fit", call. = FALSE)
   }
+  ## The weight layout is built from the REGISTRY (.nets) while the sensitivity
+  ## states are built from the parsed CALLS, so the two must describe the same
+  ## set of networks.  When they disagree the failure is obscure: a registry
+  ## entry with no call leaves .ownerOf short, and indexing a named vector past
+  ## its end raises "subscript out of bounds"; two calls sharing an id make
+  ## nnAugmentModel() emit twice the variational states the layout accounts for,
+  ## and the extra ones are silently dropped from the gradient.
+  ##
+  ## Neither is reachable through nn() -- every nn() gets its own id from
+  ## rxUdfUiNum() -- but hand-written model text can produce both, so say so
+  ## rather than failing obliquely later.
+  .callIds <- vapply(.calls, function(.c) .c$id, integer(1))
+  .netIds <- vapply(.nets, function(.m) as.integer(.m$id), integer(1))
+  if (anyDuplicated(.callIds)) {
+    stop("nlmixr2nn: network id ",
+         paste(unique(.callIds[duplicated(.callIds)]), collapse = ", "),
+         " is called more than once in the model; a network must appear once, ",
+         "because its weight sensitivities are laid out per network, not per call",
+         call. = FALSE)
+  }
+  if (!setequal(.callIds, .netIds)) {
+    stop("nlmixr2nn: the registered networks (", paste(sort(.netIds), collapse = ", "),
+         ") do not match the ones the model calls (", paste(sort(.callIds), collapse = ", "),
+         ")", call. = FALSE)
+  }
   ## global weight index -> which network it belongs to, and its local index
   .ownerOf <- integer(0); .localOf <- integer(0)
   for (.c in .calls) {

@@ -90,3 +90,68 @@ test_that("that gradient matches a finite difference, where it used to be zero",
   expect_equal(stateOnly, rep(0, nW))
   expect_gt(max(abs(fd)), 1)
 })
+
+test_that("the direct term uses each weight's OWN network, with a local index", {
+  ## Weight indices are GLOBAL across networks (net 0's block, then net 1's),
+  ## while nnWg<K> takes a LOCAL index within its own network.  Getting that
+  ## mapping wrong would attribute one network's direct gradient to the other's
+  ## weights -- a wrong gradient, not an error.  A single-network model cannot
+  ## catch it, because there the two indexings coincide.
+  skip_if_not_installed("rxode2")
+  local_nn()
+  m <- function() {
+    ini({ lk <- -1; add.sd <- 0.3 })
+    model({
+      k <- exp(lk)
+      d/dt(centr) <- -k * centr
+      ## two networks of DIFFERENT widths, both feeding the prediction directly
+      y <- nn(centr, n_hidden = 2L, act = "tanh") + nn(centr, n_hidden = 3L, act = "tanh")
+      y ~ add(add.sd)
+    })
+  }
+  set.seed(6)
+  ui <- suppressWarnings(suppressMessages(rxode2::rxode2(m)))
+  aug <- .nnAugmentFromUi(rxode2::rxUiDecompress(ui))
+
+  nW0 <- 2L * 1L + 2L * 2L + 1L      # net 0: K=1, H=2  -> 7
+  nW1 <- 3L * 1L + 2L * 3L + 1L      # net 1: K=1, H=3  -> 10
+  expect_equal(aug$nW, nW0 + nW1)
+
+  lines <- strsplit(aug$text, "\n")[[1]]
+  psw <- grep("^rx_predsw_", lines, value = TRUE)
+  expect_length(psw, nW0 + nW1)
+
+  ## the first block belongs to network 0 with local indices 0..nW0-1 ...
+  expect_true(grepl("nnWg1\\(0, 0,", psw[1L]))
+  expect_true(grepl("nnWg1\\(0, 6,", psw[nW0]))
+  ## ... and the second to network 1, with its local index restarting at 0
+  expect_true(grepl("nnWg1\\(1, 0,", psw[nW0 + 1L]))
+  expect_true(grepl("nnWg1\\(1, 9,", psw[nW0 + nW1]))
+  ## no weight may be attributed to the other network
+  expect_false(any(grepl("nnWg1\\(1,", psw[seq_len(nW0)])))
+  expect_false(any(grepl("nnWg1\\(0,", psw[(nW0 + 1L):(nW0 + nW1)])))
+})
+
+test_that("a registry that disagrees with the model is refused, not indexed past its end", {
+  ## .ownerOf is built from the parsed calls while the weight layout comes from
+  ## the registry; a mismatch used to surface as "subscript out of bounds" from
+  ## indexing a named vector past its end.
+  skip_if_not_installed("rxode2")
+  local_nn()
+  m <- function() {
+    ini({ lk <- -1; add.sd <- 0.3 })
+    model({
+      k <- exp(lk)
+      d/dt(centr) <- -k * centr
+      y <- nn(centr, n_hidden = 2L, act = "tanh")
+      y ~ add(add.sd)
+    })
+  }
+  set.seed(6)
+  ui <- suppressWarnings(suppressMessages(rxode2::rxode2(m)))
+  ## inject a network the model never calls
+  .nnEnv$reg[["1"]] <- list(id = 1L, K = 1L, H = 2L, act = "tanh",
+                            weights = nnWeightLayout(1L, 1L, 2L))
+  expect_error(.nnAugmentFromUi(rxode2::rxUiDecompress(ui)),
+               "do not match the ones the model calls")
+})
