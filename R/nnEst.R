@@ -180,10 +180,73 @@
   .states <- rxode2::rxStateOde(rxode2::rxS(rxode2::rxGetModel(.augBase), TRUE,
                                             promoteLinSens = FALSE))
   .dpds <- .nnDpDs(.augBase, .states, .end$state)
-  if (all(.dpds == "0")) {
+  ## The prediction can depend on the network TWO ways, and both must be in the
+  ## sensitivity or the gradient is silently wrong:
+  ##
+  ##   through the states   sum_s d(pred)/d(s) * ds/dw      <- the usual route
+  ##   directly             d(pred)/dg * dg/dw              <- e.g. y <- nn(centr)
+  ##
+  ## The direct term is zero for the common model, where the network appears only
+  ## in a d/dt() -- which is why omitting it went unnoticed.  When the network
+  ## feeds the prediction itself, the state route carries NONE of the effect and
+  ## the assembled gradient came out exactly zero, so such a model did not train
+  ## at all and said nothing.
+  .symBase <- rxode2::rxS(rxode2::rxGetModel(.augBase), TRUE, promoteLinSens = FALSE)
+  .calls <- .nnParseCallAll(.augBase)
+  .dpdg <- stats::setNames(
+    vapply(.calls, function(.c) .nnDvarDg(.symBase, .end$state, .c), character(1)),
+    vapply(.calls, function(.c) as.character(.c$id), character(1)))
+  .anyDirect <- any(.dpdg != "0" & nzchar(.dpdg))
+  if (all(.dpds == "0") && !.anyDirect) {
     stop("nlmixr2nn: the prediction '", .end$state,
-         "' does not depend on any ODE state -- nothing for the network to fit",
+         "' does not depend on any ODE state, nor on the network directly -- ",
+         "nothing for the network to fit", call. = FALSE)
+  }
+  ## The weight layout is built from the REGISTRY (.nets) while the sensitivity
+  ## states are built from the parsed CALLS, so the two must describe the same
+  ## set of networks.  When they disagree the failure is obscure: a registry
+  ## entry with no call leaves .ownerOf short, and indexing a named vector past
+  ## its end raises "subscript out of bounds"; two calls sharing an id make
+  ## nnAugmentModel() emit twice the variational states the layout accounts for,
+  ## and the extra ones are silently dropped from the gradient.
+  ##
+  ## Neither is reachable through nn() -- every nn() gets its own id from
+  ## rxUdfUiNum() -- but hand-written model text can produce both, so say so
+  ## rather than failing obliquely later.
+  .callIds <- vapply(.calls, function(.c) .c$id, integer(1))
+  .netIds <- vapply(.nets, function(.m) as.integer(.m$id), integer(1))
+  if (anyDuplicated(.callIds)) {
+    stop("nlmixr2nn: network id ",
+         paste(unique(.callIds[duplicated(.callIds)]), collapse = ", "),
+         " is called more than once in the model; a network must appear once, ",
+         "because its weight sensitivities are laid out per network, not per call",
          call. = FALSE)
+  }
+  if (!setequal(.callIds, .netIds)) {
+    stop("nlmixr2nn: the registered networks (", paste(sort(.netIds), collapse = ", "),
+         ") do not match the ones the model calls (", paste(sort(.callIds), collapse = ", "),
+         ")", call. = FALSE)
+  }
+  ## The input dimension has to agree too, and for the same reason: the weight
+  ## layout and the torch module size come from the REGISTRY's K, while the
+  ## variational states and the nnWg<K> arity come from the CALL's K (nn2 -> 2).
+  ## Disagreement desynchronises the layout -- too few registered inputs and the
+  ## compiled nnWg<K> strides past the end of the weight buffer, which is a
+  ## silent over-read rather than an error.
+  for (.c in .calls) {
+    .m <- Filter(function(.x) .x$id == .c$id, .nets)[[1L]]
+    if (as.integer(.m$K) != as.integer(.c$K)) {
+      stop("nlmixr2nn: network ", .c$id, " is registered with ", .m$K,
+           " input(s) but the model calls nn", .c$K, "() with ", .c$K,
+           call. = FALSE)
+    }
+  }
+  ## global weight index -> which network it belongs to, and its local index
+  .ownerOf <- integer(0); .localOf <- integer(0)
+  for (.c in .calls) {
+    .nWc <- as.integer(.hOfNet(.nets, .c$id) * .c$K + 2L * .hOfNet(.nets, .c$id) + 1L)
+    .ownerOf <- c(.ownerOf, rep(.c$id, .nWc))
+    .localOf <- c(.localOf, seq_len(.nWc) - 1L)
   }
   .predsw <- vapply(seq_len(.totW) - 1L, function(j) {
     .terms <- character(0)
@@ -192,6 +255,15 @@
         .terms <- c(.terms, sprintf("(%s)*rx_sw_%s_%d_", .dpds[[.si]], .states[.si], j))
       }
     }
+    ## the direct term, for the network this weight belongs to
+    .id <- .ownerOf[j + 1L]
+    .d <- .dpdg[[as.character(.id)]]
+    if (!is.null(.d) && !identical(.d, "0") && nzchar(.d)) {
+      .cj <- Filter(function(.c) .c$id == .id, .calls)[[1L]]
+      .terms <- c(.terms, sprintf("(%s)*nnWg%d(%d, %d, %s)", .d, .cj$K, .id,
+                                  .localOf[j + 1L], paste(.cj$inputs, collapse = ", ")))
+    }
+    if (length(.terms) == 0L) .terms <- "0"
     sprintf("rx_predsw_%d_ = %s", j, paste(.terms, collapse = " + "))
   }, character(1))
   .augText <- paste(c(.augText, .predsw), collapse = "\n")
