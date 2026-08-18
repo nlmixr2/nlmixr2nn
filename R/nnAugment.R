@@ -50,6 +50,33 @@
   }, character(1))
 }
 
+## hidden width of a network by id, from the augment metadata list
+.hOfNet <- function(nets, id) {
+  for (.m in nets) if (.m$id == id) return(as.integer(.m$H))
+  NA_integer_
+}
+
+## d(var)/dg for an arbitrary model variable, by the same substitution as
+## .nnDrDg: replace the nn call with a symbol, differentiate, put it back.
+##
+## This is the DIRECT dependence of a quantity on the network output, as opposed
+## to its dependence through the ODE states.  It is zero for the usual model,
+## where the network appears only in a d/dt() -- which is why it was missing and
+## nothing noticed.  It is NOT zero when the network feeds the prediction (or a
+## distribution's parameter) itself, e.g. `y <- nn(centr)`, and there the forward
+## sensitivity through the states carries none of the effect: the assembled
+## gradient came out exactly zero and such a model trained not at all.
+.nnDvarDg <- function(model, varName, call) {
+  .G <- symengine::Symbol("rx__nnG__")
+  .nnStr <- sprintf("%s(%d.0, %s)", call$fn, call$id, paste(call$inputs, collapse = ", "))
+  .nnExpr <- symengine::S(.nnStr)
+  .rhs <- get0(varName, envir = model, inherits = FALSE)
+  if (is.null(.rhs)) return("0")
+  .dd <- symengine::D(symengine::subs(.rhs, .nnExpr, .G), .G)
+  .dd <- symengine::subs(.dd, .G, .nnExpr)
+  rxode2::rxFromSE(.dd)
+}
+
 #' Build the forward-sensitivity augmented NN model text
 #'
 #' Supports one or more `nn<K>(id, ...)` outputs used in the ODE RHS.  The weight

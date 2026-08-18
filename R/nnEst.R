@@ -180,10 +180,34 @@
   .states <- rxode2::rxStateOde(rxode2::rxS(rxode2::rxGetModel(.augBase), TRUE,
                                             promoteLinSens = FALSE))
   .dpds <- .nnDpDs(.augBase, .states, .end$state)
-  if (all(.dpds == "0")) {
+  ## The prediction can depend on the network TWO ways, and both must be in the
+  ## sensitivity or the gradient is silently wrong:
+  ##
+  ##   through the states   sum_s d(pred)/d(s) * ds/dw      <- the usual route
+  ##   directly             d(pred)/dg * dg/dw              <- e.g. y <- nn(centr)
+  ##
+  ## The direct term is zero for the common model, where the network appears only
+  ## in a d/dt() -- which is why omitting it went unnoticed.  When the network
+  ## feeds the prediction itself, the state route carries NONE of the effect and
+  ## the assembled gradient came out exactly zero, so such a model did not train
+  ## at all and said nothing.
+  .symBase <- rxode2::rxS(rxode2::rxGetModel(.augBase), TRUE, promoteLinSens = FALSE)
+  .calls <- .nnParseCallAll(.augBase)
+  .dpdg <- stats::setNames(
+    vapply(.calls, function(.c) .nnDvarDg(.symBase, .end$state, .c), character(1)),
+    vapply(.calls, function(.c) as.character(.c$id), character(1)))
+  .anyDirect <- any(.dpdg != "0" & nzchar(.dpdg))
+  if (all(.dpds == "0") && !.anyDirect) {
     stop("nlmixr2nn: the prediction '", .end$state,
-         "' does not depend on any ODE state -- nothing for the network to fit",
-         call. = FALSE)
+         "' does not depend on any ODE state, nor on the network directly -- ",
+         "nothing for the network to fit", call. = FALSE)
+  }
+  ## global weight index -> which network it belongs to, and its local index
+  .ownerOf <- integer(0); .localOf <- integer(0)
+  for (.c in .calls) {
+    .nWc <- as.integer(.hOfNet(.nets, .c$id) * .c$K + 2L * .hOfNet(.nets, .c$id) + 1L)
+    .ownerOf <- c(.ownerOf, rep(.c$id, .nWc))
+    .localOf <- c(.localOf, seq_len(.nWc) - 1L)
   }
   .predsw <- vapply(seq_len(.totW) - 1L, function(j) {
     .terms <- character(0)
@@ -192,6 +216,15 @@
         .terms <- c(.terms, sprintf("(%s)*rx_sw_%s_%d_", .dpds[[.si]], .states[.si], j))
       }
     }
+    ## the direct term, for the network this weight belongs to
+    .id <- .ownerOf[j + 1L]
+    .d <- .dpdg[[as.character(.id)]]
+    if (!is.null(.d) && !identical(.d, "0") && nzchar(.d)) {
+      .cj <- Filter(function(.c) .c$id == .id, .calls)[[1L]]
+      .terms <- c(.terms, sprintf("(%s)*nnWg%d(%d, %d, %s)", .d, .cj$K, .id,
+                                  .localOf[j + 1L], paste(.cj$inputs, collapse = ", ")))
+    }
+    if (length(.terms) == 0L) .terms <- "0"
     sprintf("rx_predsw_%d_ = %s", j, paste(.terms, collapse = " + "))
   }, character(1))
   .augText <- paste(c(.augText, .predsw), collapse = "\n")
