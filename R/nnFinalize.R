@@ -42,3 +42,39 @@
   }
   fit
 }
+
+## Attach the trained network to the fit, for BOTH branches -- the round loop and
+## the no-BSV population fit.
+##
+## The two used to carry their own copy of this block, and the copies had already
+## drifted: the population branch never snapshotted the shape registry onto its
+## stored ui.  That is harmless today only because parse-time adoption
+## (.nnAdopt) puts the same shapes there first, so a saved QSP fit does reload --
+## but it was one edit away from not being true, and the branch that would break
+## is the one with no in-session symptom.  One writer now.
+##
+## `weights` is the GLOBAL weight vector in aug$weights order.  Everything lands
+## on the fit ENV, never with `$<-`, which would add a data column.
+.nnStoreNnFit <- function(ctx, fit, weights, parHist, converged, nRun) {
+  .trained <- stats::setNames(weights, ctx$aug$weights)
+  .fitEnv <- fit$env
+  .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
+  rxode2::rxForcedPars(.storedUi) <- .trained
+  ## snapshot the transient shape registry onto the ui so a reloaded fit can
+  ## rebuild it (.nnRehydrate) and stride the weights carried in rxForcedPars().
+  .nnMeta <- lapply(.nnEnv$reg, function(m) {
+    list(id = m$id, weights = m$weights, K = m$K, H = m$H, act = m$act)
+  })
+  assign("nnMeta", .nnMeta, envir = .storedUi)
+  .sticky <- if (exists("sticky", envir = .storedUi, inherits = FALSE)) {
+    get("sticky", envir = .storedUi, inherits = FALSE)
+  } else character(0)
+  assign("sticky", unique(c(.sticky, "nnMeta")), envir = .storedUi)
+  .nnMarkTrained(.storedUi, ctx$aug)
+  assign("ui", .storedUi, envir = .fitEnv)
+  assign("nnParHist", parHist, envir = .fitEnv)
+  assign("nnWeights", .trained, envir = .fitEnv)
+  assign("nnConverged", converged, envir = .fitEnv)
+  assign("nnRounds", nRun, envir = .fitEnv)
+  fit
+}
