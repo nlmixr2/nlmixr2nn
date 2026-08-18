@@ -121,3 +121,29 @@
   .tr <- if (is.null(ep$transform)) "untransformed" else as.character(ep$transform)
   !(is.na(.tr) || !nzchar(.tr) || identical(.tr, "untransformed"))
 }
+
+## ---------------------------------------------------------------------------
+## Error-model parsing.  The transform above is the endpoint's OTHER half: this
+## reads the residual model, that reads the scale it lives on.
+## Parse the single (Gaussian) endpoint from the normalized model lines:
+## `<pred> ~ add(<a>)`, `~ prop(<b>)`, or `~ add(<a>) + prop(<b>)`.  Returns
+## list(state = pred var, add = additive-sd param or NA, prop = proportional-sd
+## param or NA), or NULL when the error model is unsupported / not found.
+.nnErrEndpoint <- function(lines) {
+  .re <- "^\\s*([A-Za-z._][A-Za-z0-9._]*)\\s*~\\s*(.+?)\\s*$"
+  .m <- regmatches(lines, regexec(.re, lines))
+  .hit <- Filter(function(x) length(x) == 3L, .m)
+  if (length(.hit) != 1L) return(NULL)
+  .var <- .hit[[1L]][[2L]]
+  .rhs <- .hit[[1L]][[3L]]
+  .term <- function(fn) {
+    .r <- sprintf("\\b%s\\(\\s*([A-Za-z._][A-Za-z0-9._]*)\\s*\\)", fn)
+    if (!grepl(.r, .rhs)) return(NA_character_)
+    regmatches(.rhs, regexec(.r, .rhs))[[1L]][[2L]]
+  }
+  .add <- .term("add"); .prop <- .term("prop")
+  ## add/prop give the closed-form Gaussian cotangent; any OTHER error model (add
+  ## and prop both NA, e.g. lnorm / transform-both-sides) still yields the endpoint
+  ## state -- its cotangent then comes from the inner fit (cotangent = "exact").
+  list(state = .var, add = .add, prop = .prop)
+}
