@@ -155,3 +155,71 @@ test_that("a registry that disagrees with the model is refused, not indexed past
   expect_error(.nnAugmentFromUi(rxode2::rxUiDecompress(ui)),
                "do not match the ones the model calls")
 })
+
+test_that("the multi-network direct gradient matches a finite difference", {
+  ## The text assertions above prove the string builder routes indices to the
+  ## right network.  They do NOT prove the assembled number is the gradient --
+  ## a regex test passes just as happily if the compiled layout is misaligned.
+  ## This checks the value, across the combined two-network weight layout.
+  skip_if_not_installed("rxode2")
+  local_nn()
+  .nnLoaderOn(); on.exit(.nnLoaderOff(), add = TRUE)
+
+  m <- function() {
+    ini({ lk <- -1; add.sd <- 0.3 })
+    model({
+      k <- exp(lk)
+      d/dt(centr) <- -k * centr
+      y <- nn(centr, n_hidden = 2L, act = "tanh") + nn(centr, n_hidden = 3L, act = "tanh")
+      y ~ add(add.sd)
+    })
+  }
+  set.seed(6)
+  ui <- suppressWarnings(suppressMessages(rxode2::rxode2(m)))
+  aug <- .nnAugmentFromUi(rxode2::rxUiDecompress(ui))
+  nWt <- aug$nW
+
+  ## put each network's slice of the GLOBAL weight vector where the augmented
+  ## model reads it
+  setW <- function(w) {
+    for (net in aug$nets) {
+      nnSetMeta(net$id, net$augBase, net$K, net$H, net$act)
+      nnSetWeights(net$id, w[net$gIdx])
+    }
+  }
+  pars <- c(lk = -1, stats::setNames(rep(0, nWt), aug$weights))
+  ev <- rxode2::et(c(1, 2, 3, 4))
+  ic <- c(centr = 8)
+  ot <- c(1, 2, 3, 4); dv <- c(0.4, 0.25, 0.15, 0.1); sig <- 0.3
+
+  solveY <- function(w) {
+    setW(w)
+    s <- rxode2::rxSolve(aug$mAug, ev, params = pars, inits = ic,
+                         returnType = "data.frame")
+    s$y[match(ot, s$time)]
+  }
+  ll <- function(w) sum(stats::dnorm(dv, solveY(w), sig, log = TRUE))
+
+  set.seed(11)
+  w <- stats::rnorm(nWt, 0, 0.3)
+  setW(w)
+  sA <- rxode2::rxSolve(aug$mAug, ev, params = pars, inits = ic,
+                        returnType = "data.frame")
+  idx <- match(ot, sA$time)
+  score <- (dv - sA$y[idx]) / sig^2
+  got <- vapply(seq_len(nWt) - 1L,
+                function(j) sum(score * sA[[sprintf("rx_predsw_%d_", j)]][idx]),
+                numeric(1))
+
+  h <- 1e-5
+  fd <- vapply(seq_len(nWt), function(j) {
+    wp <- w; wp[j] <- wp[j] + h; wm <- w; wm[j] <- wm[j] - h
+    (ll(wp) - ll(wm)) / (2 * h)
+  }, numeric(1))
+
+  expect_equal(got, fd, tolerance = 1e-4)
+  ## both networks must actually contribute, or the test would pass with one
+  ## network's block silently zero
+  expect_gt(max(abs(fd[aug$nets[[1L]]$gIdx])), 1e-3)
+  expect_gt(max(abs(fd[aug$nets[[2L]]$gIdx])), 1e-3)
+})

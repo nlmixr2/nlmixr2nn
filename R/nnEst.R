@@ -227,6 +227,20 @@
          ") do not match the ones the model calls (", paste(sort(.callIds), collapse = ", "),
          ")", call. = FALSE)
   }
+  ## The input dimension has to agree too, and for the same reason: the weight
+  ## layout and the torch module size come from the REGISTRY's K, while the
+  ## variational states and the nnWg<K> arity come from the CALL's K (nn2 -> 2).
+  ## Disagreement desynchronises the layout -- too few registered inputs and the
+  ## compiled nnWg<K> strides past the end of the weight buffer, which is a
+  ## silent over-read rather than an error.
+  for (.c in .calls) {
+    .m <- Filter(function(.x) .x$id == .c$id, .nets)[[1L]]
+    if (as.integer(.m$K) != as.integer(.c$K)) {
+      stop("nlmixr2nn: network ", .c$id, " is registered with ", .m$K,
+           " input(s) but the model calls nn", .c$K, "() with ", .c$K,
+           call. = FALSE)
+    }
+  }
   ## global weight index -> which network it belongs to, and its local index
   .ownerOf <- integer(0); .localOf <- integer(0)
   for (.c in .calls) {
