@@ -94,12 +94,12 @@
   list(obj = 2 * .obj, dLLdf = .dLLdf)          # objf = -2LL = 2 * minimum
 }
 
-.nnPopWarmStart <- function(aug, data, idCol, obs, dv, wPlaceholder, thetas, errPar,
-                            w0, est, iters, exactCtx = NULL) {
+.nnPopWarmStart <- function(aug, data, idCol, timeCol, obs, dv, wPlaceholder, thetas,
+                            errPar, w0, est, iters, exactCtx = NULL) {
   .ad <- data
   for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- 0    # population: eta = 0
   if (errPar$add == 0 && errPar$prop == 0) errPar$add <- 1      # avoid R(f)=0
-  .key <- paste(data[[idCol]][obs], data$time[obs])
+  .key <- paste(data[[idCol]][obs], data[[timeCol]][obs])
   .dvObs <- dv[obs]
   ## objective (-2 log-likelihood) + analytic gradient at the GLOBAL weight vector w
   ## (all networks concatenated in aug$nets order)

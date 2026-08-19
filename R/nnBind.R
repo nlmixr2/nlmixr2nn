@@ -156,3 +156,17 @@
   NULL
 }
 
+
+## Resolve a standard data column by name, case-insensitively.
+##
+## nlmixr2 accepts ID/id, TIME/time, DV/dv, EVID/evid interchangeably, and the
+## engine reads several of them by name.  A missed column is NOT an error:
+## `data$time` on a data set written with TIME -- the NONMEM convention, and what
+## most users write -- is NULL, the observation match then yields all NA, and the
+## assembled gradient is quietly NaN.  Every test in this package happened to use
+## the lower-case spelling, so that went unnoticed until a count endpoint, whose
+## score asserts its input is finite, refused it.
+.nnDataCol <- function(data, want) {
+  .i <- match(tolower(want), tolower(names(data)))
+  if (is.na(.i)) NA_character_ else names(data)[.i]
+}

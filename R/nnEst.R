@@ -66,6 +66,25 @@
   ## env$control is already a validated control for .innerEst (nlmixr2() fills it
   ## before dispatch), so it is used directly as the inner NLME control.
   .innerCtl <- env$control
+  ## Checked FIRST, before anything is compiled or allocated: unusable data is
+  ## the cheapest failure to report and the most expensive one to discover in
+  ## round three.  Resolved case-insensitively (R/nnBind.R) -- ID/id, TIME/time,
+  ## DV/dv, EVID/evid are all legal nlmixr2 spellings, and reading the wrong one
+  ## is silent, not an error.  nnCovData() below only ADDS columns, so names
+  ## resolved here stay valid.
+  .idCol <- .nnDataCol(.data, "ID")
+  .timeCol <- .nnDataCol(.data, "TIME")
+  .dvCol <- .nnDataCol(.data, "DV")
+  .evidCol <- .nnDataCol(.data, "EVID")
+  if (anyNA(c(.idCol, .timeCol, .dvCol))) {
+    stop("nlmixr2nn: the fitting data needs ID, TIME and DV columns (any case); ",
+         "missing ",
+         paste(c("ID", "TIME", "DV")[is.na(c(.idCol, .timeCol, .dvCol))],
+               collapse = ", "), call. = FALSE)
+  }
+  .obs <- if (is.na(.evidCol)) rep(TRUE, nrow(.data)) else .data[[.evidCol]]
+  .obs <- is.na(.obs) | .obs == 0
+  .dv <- .data[[.dvCol]]
   .origTablesCov <- .nnStashTablesCov(.innerCtl)
   .innerCtl <- .nnDisableTablesCov(.innerCtl)
   ## refit of a reloaded fit (fresh session): the model text already carries
@@ -164,12 +183,8 @@
     .nnLoaderOn()
   }
 
-  .idCol <- if ("ID" %in% names(.data)) "ID" else "id"
-  .obs <- .data[[if ("EVID" %in% names(.data)) "EVID" else "evid"]]
-  .obs <- is.na(.obs) | .obs == 0
-  .dv <- .data[[if ("DV" %in% names(.data)) "DV" else "dv"]]
   .wPlaceholder <- stats::setNames(rep(0, .aug$nW), .aug$weights)
-  .weightStep <- .nnWeightStepper(.aug, .data, .idCol, .obs, .dv, .wPlaceholder)
+  .weightStep <- .nnWeightStepper(.aug, .data, .idCol, .timeCol, .obs, .dv, .wPlaceholder)
   ## eta-free (population UDE) models have no latent input to the network; the
   ## weight step then solves at the pooled population (no per-subject EBEs).
   .hasEta <- length(.aug$covMap) > 0L
@@ -187,8 +202,9 @@
                                             "laplace", "agq", "emvi", "fbvi", "vae"))
   .exactPosthoc <- .exact && !.exactSelf
   ## a non-add()/prop() error model has no closed-form Gaussian cotangent -- its
-  ## score must come from the inner fit.
-  if (is.na(.aug$errAdd) && is.na(.aug$errProp) && !.exact) {
+  ## score comes from the endpoint's distribution (a count endpoint) or from the
+  ## inner fit (anything else).
+  if (is.na(.aug$errAdd) && is.na(.aug$errProp) && !.exact && is.null(.aug$dist)) {
     stop("nlmixr2nn: this error model has no add()/prop() term; ",
          "fit with nnControl(cotangent = \"exact\")", call. = FALSE)
   }
@@ -218,7 +234,8 @@
 
   list(ui = .ui, data = .data, innerEst = .innerEst, control = .innerCtl,
        origTablesCov = .origTablesCov, aug = .aug, baseBases = .baseBases,
-       existing = .existing, idCol = .idCol, obs = .obs, dv = .dv,
+       existing = .existing, idCol = .idCol, timeCol = .timeCol,
+       obs = .obs, dv = .dv,
        wPlaceholder = .wPlaceholder, weightStep = .weightStep,
        hasEta = .hasEta, latent = .latent,
        exact = .exact, exactSelf = .exactSelf, exactPosthoc = .exactPosthoc,
@@ -241,7 +258,7 @@
 .nnRunPopFit <- function(ctx) {
   .ui <- ctx$ui; .data <- ctx$data; .aug <- ctx$aug; .innerEst <- ctx$innerEst
   .innerCtl <- ctx$control; .baseBases <- ctx$baseBases; .hasEta <- ctx$hasEta
-  .idCol <- ctx$idCol; .obs <- ctx$obs; .dv <- ctx$dv
+  .idCol <- ctx$idCol; .timeCol <- ctx$timeCol; .obs <- ctx$obs; .dv <- ctx$dv
   .wPlaceholder <- ctx$wPlaceholder; .th0 <- ctx$th0; .errPar0 <- ctx$errPar0
   sched <- ctx$sched
   .nlmBases <- if (.hasEta) NULL else .nnNlmBase(.ui, .aug)
@@ -259,9 +276,9 @@
   ## uses the closed-form Gaussian score, and .nnInferSched() refuses an
   ## endpoint that has no closed form rather than fitting one wrongly.
   .exactCtx <- NULL
-  .wFit <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder, .th0, .errPar0,
-                           .nnAllTorchWeights(.aug), .innerEst, sched$rounds,
-                           exactCtx = .exactCtx)
+  .wFit <- .nnPopWarmStart(.aug, .data, .idCol, .timeCol, .obs, .dv, .wPlaceholder,
+                           .th0, .errPar0, .nnAllTorchWeights(.aug), .innerEst,
+                           sched$rounds, exactCtx = .exactCtx)
   .nnSetAllTorchWeights(.aug, .wFit)
   .dw <- .nnFillWeightCols(.aug, .data)
   if (!is.null(.nlmBases)) {
@@ -310,7 +327,8 @@
 ## The two population pre-fits that seed the loop.  Both act on the torch modules
 ## in place and return nothing -- the weights ARE the state being warmed.
 .nnRunWarmStarts <- function(ctx) {
-  .aug <- ctx$aug; .data <- ctx$data; .idCol <- ctx$idCol; .obs <- ctx$obs
+  .aug <- ctx$aug; .data <- ctx$data; .idCol <- ctx$idCol
+  .timeCol <- ctx$timeCol; .obs <- ctx$obs
   .dv <- ctx$dv; .wPlaceholder <- ctx$wPlaceholder; .th0 <- ctx$th0
   .errPar0 <- ctx$errPar0; .existing <- ctx$existing
   .weightStep <- ctx$weightStep; sched <- ctx$sched
@@ -318,7 +336,7 @@
   ## joint fit with a robust weight vector (unless the model already carries
   ## trained weights, in which case those are the warm start).
   if (!identical(sched$warmStart, "none") && is.null(.existing)) {
-    .wPop <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder,
+    .wPop <- .nnPopWarmStart(.aug, .data, .idCol, .timeCol, .obs, .dv, .wPlaceholder,
                              .th0, .errPar0, .nnAllTorchWeights(.aug),
                              sched$warmStart, sched$warmPopIters)
     .nnSetAllTorchWeights(.aug, .wPop)
