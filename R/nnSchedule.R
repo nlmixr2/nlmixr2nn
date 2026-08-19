@@ -25,12 +25,17 @@
   if (is.null(.p) || !is.data.frame(.p) || nrow(.p) == 0L) {
     return(list(n = NA_integer_, distribution = NA_character_,
                 transform = NA_character_, errType = NA_character_,
+                distInfo = NULL, distScore = FALSE,
                 closedForm = FALSE, conds = character(0)))
   }
   .dist <- as.character(.p$distribution[1L])
   .tr <- as.character(.p$transform[1L])
   .err <- as.character(.p$errType[1L])
+  .di <- .nnDistInfo(.p)
   list(n = nrow(.p), distribution = .dist, transform = .tr, errType = .err,
+       ## non-normal endpoints we can score from the distribution's own
+       ## derivative rather than from the hook (which reports 1 for all of them)
+       distInfo = .di, distScore = !is.null(.di) && isTRUE(.di$supported),
        ## the closed-form additive/proportional Gaussian score is only valid on
        ## an untransformed normal endpoint; anything else needs the exact
        ## per-observation score from the likelihood hook
@@ -70,11 +75,15 @@
     stop("nlmixr2nn supports a single endpoint; this model has ", .ep$n,
          " (", paste(.ep$conds, collapse = ", "), ")", call. = FALSE)
   }
-  if (!is.na(.ep$distribution) && !identical(.ep$distribution, "norm")) {
-    stop("nlmixr2nn supports normal-distribution endpoints (any transformation); ",
-         "this model's endpoint is '", .ep$distribution, "'.  For ll()/pois()/",
-         "binom() the likelihood hook reports d(LL)/d(f) with f the log-density, ",
-         "which cannot yet be chained through the ODE sensitivity.", call. = FALSE)
+  if (!is.na(.ep$distribution) && !identical(.ep$distribution, "norm") &&
+        !.ep$distScore) {
+    stop("nlmixr2nn cannot form a weight gradient for a '", .ep$distribution,
+         "' endpoint.  For a non-normal endpoint the likelihood hook reports ",
+         "d(LL)/d(f) = 1 -- f is the log-density itself -- so the score has to ",
+         "come from the distribution, and only ",
+         paste(names(.nnDistFuns), collapse = "/"),
+         " have one here.  Normal endpoints are supported under any ",
+         "transformation.", call. = FALSE)
   }
   if (.isNlm && .hasEta) {
     ## the nlm family is a population optimizer: it has no random effects at all.
@@ -100,7 +109,12 @@
   ## So the exact score is not "better and pending"; it earns its place on the
   ## endpoints the closed form cannot express -- transformed and non-Gaussian --
   ## and is used exactly there.  See test-nn-cotangent-agree.R.
-  .cot <- if (.ep$closedForm) "gaussian" else "exact"
+  ## Three sources, in decreasing order of self-consistency: the Gaussian closed
+  ## form, the endpoint distribution's own derivative, and the score captured
+  ## from the inner fit.  The first two are recomputed from the SAME solve that
+  ## produced the sensitivities; the third cannot be, which is why it is used
+  ## only where neither closed form exists.
+  .cot <- if (.ep$closedForm) "gaussian" else if (.ep$distScore) "dist" else "exact"
   .s <- list(
     mode = "iter", tol = 1e-3, outerPerRound = 1L,
     cotangent = .cot,
@@ -155,9 +169,13 @@
     ## absorb, so it can run as long as the data can identify the weights
     .s$warmPopIters <- .nnClamp(.nObs %/% nW, 3L, 50L)
   }
+  ## Everything .nnResolveSched() may test.  A conflict rule reading a field
+  ## that is not here does not fail -- it reads NULL, and isTRUE(NULL) quietly
+  ## sends the rule the wrong way, which is how a guard ends up never firing.
   .s$predicates <- list(est = .est, hasEta = .hasEta, isNlm = .isNlm,
                         resumes = .resumes, knob = .knob, closedForm = .ep$closedForm,
-                        transform = .ep$transform, hasTrained = hasTrained)
+                        transform = .ep$transform, distribution = .ep$distribution,
+                        distScore = .ep$distScore, hasTrained = hasTrained)
   .s
 }
 
@@ -184,8 +202,25 @@
         !isTRUE(.p$closedForm)) {
     stop("nnControl(cotangent = \"gaussian\") needs an untransformed additive/",
          "proportional normal endpoint; this model's endpoint is '",
-         .p$transform, "'.  Omit `cotangent=` and the exact score is used.",
-         call. = FALSE)
+         .p$distribution, "' / '", .p$transform,
+         "'.  Omit `cotangent=` and the right score is chosen.", call. = FALSE)
+  }
+  if ("cotangent" %in% .set && identical(user$cotangent, "dist") &&
+        !isTRUE(.p$distScore)) {
+    stop("nnControl(cotangent = \"dist\") uses the endpoint distribution's own ",
+         "derivative, which exists here only for ",
+         paste(names(.nnDistFuns), collapse = "/"), "; this model's endpoint is '",
+         .p$distribution, "'.", call. = FALSE)
+  }
+  if ("cotangent" %in% .set && identical(user$cotangent, "exact") &&
+        isTRUE(.p$distScore)) {
+    ## Not a preference: for a non-normal endpoint the hook's f IS the
+    ## log-density, so it reports d(LL)/d(f) = 1, and multiplying that by a
+    ## sensitivity of the distribution's PARAMETER is not a gradient of anything.
+    stop("nnControl(cotangent = \"exact\") cannot be used on a '",
+         .p$distribution, "' endpoint: the likelihood hook reports ",
+         "d(LL)/d(f) = 1 there, because f is the log-density itself.  Omit ",
+         "`cotangent=` to use the distribution's own score.", call. = FALSE)
   }
   ## --- quality / efficiency ------------------------------------------------
   if ("mode" %in% .set && identical(user$mode, "joint") && !isTRUE(.p$resumes)) {

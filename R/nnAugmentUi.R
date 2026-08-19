@@ -47,6 +47,22 @@
     stop("nlmixr2nn currently supports a single additive endpoint (var ~ add(sd))",
          call. = FALSE)
   }
+  ## For a normal endpoint the network's effect is chained through the
+  ## PREDICTION.  For a count endpoint the prediction is the log-density, which
+  ## the solve cannot form (it needs DV), so the chain runs through the
+  ## distribution's own parameter instead -- `lam` in `y ~ pois(lam)`.  Only the
+  ## target variable changes; everything below is the same sensitivity.
+  .dist <- .nnDistInfo(tryCatch(ui$predDf, error = function(e) NULL))
+  if (!is.null(.dist) && !isTRUE(.dist$supported)) {
+    stop("nlmixr2nn cannot form a weight gradient for a '", .dist$dist,
+         "' endpoint: it has no closed-form score here, and the likelihood hook ",
+         "reports d(LL)/d(f) = 1 for every non-normal endpoint (f is the ",
+         "log-density itself), which is not a quantity the augmented solve can ",
+         "differentiate.  Supported: ",
+         paste(names(.nnDistFuns), collapse = ", "), ", and any normal endpoint.",
+         call. = FALSE)
+  }
+  .target <- if (is.null(.dist)) .end$state else .dist$target
   ## drop the weight dummy-covariate declaration(s) and the error line(s)
   .keep <- .lines[!grepl("^\\s*rx_nnw[0-9]+_\\s*<-", .lines) & !grepl("~", .lines)]
   ## latent etas among the nn inputs -> covariate names (dots -> underscores)
@@ -71,7 +87,7 @@
   ## states: rx_predsw_<globalj>_ = sum_s d(pred)/d(s) * rx_sw_<s>_<globalj>_.
   .states <- rxode2::rxStateOde(rxode2::rxS(rxode2::rxGetModel(.augBase), TRUE,
                                             promoteLinSens = FALSE))
-  .dpds <- .nnDpDs(.augBase, .states, .end$state)
+  .dpds <- .nnDpDs(.augBase, .states, .target)
   ## The prediction can depend on the network TWO ways, and both must be in the
   ## sensitivity or the gradient is silently wrong:
   ##
@@ -86,11 +102,11 @@
   .symBase <- rxode2::rxS(rxode2::rxGetModel(.augBase), TRUE, promoteLinSens = FALSE)
   .calls <- .nnParseCallAll(.augBase)
   .dpdg <- stats::setNames(
-    vapply(.calls, function(.c) .nnDvarDg(.symBase, .end$state, .c), character(1)),
+    vapply(.calls, function(.c) .nnDvarDg(.symBase, .target, .c), character(1)),
     vapply(.calls, function(.c) as.character(.c$id), character(1)))
   .anyDirect <- any(.dpdg != "0" & nzchar(.dpdg))
   if (all(.dpds == "0") && !.anyDirect) {
-    stop("nlmixr2nn: the prediction '", .end$state,
+    stop("nlmixr2nn: the prediction '", .target,
          "' does not depend on any ODE state, nor on the network directly -- ",
          "nothing for the network to fit", call. = FALSE)
   }
@@ -184,7 +200,8 @@
   }
   list(text = .augText, mAug = rxode2::rxode2(.augText),
        covMap = .covMap, realCovs = .realCovs, weights = .allW, nW = .totW,
-       endpoint = .end$state, errAdd = .end$add, errProp = .end$prop, ep = .ep,
+       endpoint = .target, errAdd = .end$add, errProp = .end$prop, ep = .ep,
+       dist = .dist,
        predswCols = sprintf("rx_predsw_%d_", seq_len(.totW) - 1L),
        nets = .netMeta)
 }

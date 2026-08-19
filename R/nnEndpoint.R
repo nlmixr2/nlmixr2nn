@@ -147,3 +147,55 @@
   ## state -- its cotangent then comes from the inner fit (cotangent = "exact").
   list(state = .var, add = .add, prop = .prop)
 }
+
+## ---------------------------------------------------------------------------
+## Count endpoints: which variable carries the network's effect, and its score.
+##
+## rxode2 compiles `y ~ pois(lam)` to `rx_pred_ = llikPois(DV, lam)` -- for a
+## non-normal endpoint THE PREDICTION IS THE LOG-DENSITY (rxode2
+## R/err-foceiBase.R, .foceEstLLFun).  nlmixr2est's likelihood hook consequently
+## reports d(LL)/d(f) = 1 for every such endpoint (src/inner.cpp,
+## likInner0Contrib: "a general ll() endpoint keeps d(LL)/d(f) = 1"), which is
+## correct and useless here: it would have to multiply a sensitivity OF THE
+## LOG-DENSITY, and the augmented solve cannot produce one, because the
+## log-density needs DV and the solve has no DV.
+##
+## What is chainable is the distribution's own parameter -- an ordinary model
+## variable the network drives:
+##
+##   dLL/dw = dLL/d(lam) * d(lam)/dw
+##
+## the second factor from the augmented solve exactly as for a prediction, and
+## the first from rxode2's OWN derivative rather than algebra rewritten here.
+## rxode2's .rxD table also settles WHICH parameter: llikPois and llikBinom
+## return a derivative for lambda and prob only, the others being integers or
+## fixed, so that parameter is the one the network may drive.
+.nnDistFuns <- list(
+  ## `target`/`size` name predDf COLUMNS (a, b, ...), which hold the model
+  ## variable each distribution argument was written with.
+  pois  = list(target = "a", size = NA_character_, fn = "llikPois",  d = "dLambda"),
+  binom = list(target = "b", size = "a",           fn = "llikBinom", d = "dProb")
+)
+
+## NULL for a normal endpoint (the prediction is the target, and the Gaussian
+## score applies); list(supported = FALSE) for a distribution we cannot score.
+.nnDistInfo <- function(pd) {
+  if (is.null(pd) || !is.data.frame(pd) || nrow(pd) == 0L) return(NULL)
+  .d <- as.character(pd$distribution[1L])
+  if (is.na(.d) || identical(.d, "norm")) return(NULL)
+  .f <- .nnDistFuns[[.d]]
+  if (is.null(.f)) return(list(dist = .d, supported = FALSE))
+  .tg <- as.character(pd[[.f$target]][1L])
+  if (is.na(.tg) || !nzchar(.tg)) return(list(dist = .d, supported = FALSE))
+  list(dist = .d, supported = TRUE, target = .tg,
+       size = if (is.na(.f$size)) NA_character_ else as.character(pd[[.f$size]][1L]),
+       fn = .f$fn, d = .f$d)
+}
+
+## d(LL)/d(target) per observation, from rxode2's own llik derivative.
+.nnDistScore <- function(info, y, dv, size = NULL) {
+  ## the exported rxode2 function by name -- llikPois / llikBinom
+  .fn <- getExportedValue("rxode2", info$fn)
+  .r <- if (is.na(info$size)) .fn(dv, y) else .fn(dv, size, y)
+  .r[[info$d]]
+}

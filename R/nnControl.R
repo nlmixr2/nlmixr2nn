@@ -56,12 +56,18 @@
 #'   fixed-effects starting point (e.g. a population/UDE model with no random
 #'   effect).
 #' @param optimizer torch optimizer, `"adam"` or `"sgd"`.
-#' @param cotangent source of the error-model score `dLL/df` used to form the weight
-#'   gradient: `"gaussian"` (default) uses the closed-form additive/proportional
-#'   Gaussian cotangent; `"exact"` uses the per-observation cotangent captured from
-#'   the inner fit's likelihood contribution hook, which is correct for ANY residual
-#'   model (e.g. lognormal, transform-both-sides) -- best paired with `wSteps = 1`
-#'   (the captured cotangent is at the round's weights).
+#' @param cotangent source of the endpoint score `dLL/df` used to form the weight
+#'   gradient.  `"gaussian"` is the closed-form additive/proportional Gaussian
+#'   cotangent.  `"dist"` is the endpoint distribution's own derivative, for a
+#'   count endpoint such as `pois()` or `binom()`, where `f` is the distribution's
+#'   parameter rather than a prediction.  `"exact"` is the per-observation
+#'   cotangent captured from the inner fit's likelihood contribution hook, which
+#'   is correct for any NORMAL residual model including transform-both-sides
+#'   (lognormal, Box-Cox, logit) -- best paired with `wSteps = 1`, since the
+#'   captured cotangent is at the round's starting weights.  `"exact"` does NOT
+#'   apply to a count endpoint: there the hook reports `dLL/df = 1`, because `f`
+#'   is the log-density itself.  Left unset, the source is chosen from the
+#'   endpoint, which is what you want.
 #' @param seed optional integer seed for torch weight initialization (ignored when
 #'   the model already carries trained weights, which are used as the start).
 #' @return an object of class `"nnControl"`.
@@ -88,7 +94,7 @@ nnControl <- function(mode = NULL, rounds = NULL, tol = NULL, wSteps = NULL,
   }
   mode <- .oneOf(mode, "mode", c("joint", "iter"))
   optimizer <- .oneOf(optimizer, "optimizer", c("adam", "sgd"))
-  cotangent <- .oneOf(cotangent, "cotangent", c("gaussian", "exact"))
+  cotangent <- .oneOf(cotangent, "cotangent", c("gaussian", "dist", "exact"))
   warmStart <- .oneOf(warmStart, "warmStart",
                       c("lbfgsb3c", "nlminb", "nlm", "optim", "n1qn1",
                         "bobyqa", "newuoa", "uobyqa", "none", "pop"))

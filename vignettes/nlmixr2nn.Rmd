@@ -228,7 +228,7 @@ nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(rounds = 400, lr = 0.01))
 |---|---|---|
 | `mode` | `"joint"` when the estimator resumes from a partial fit, else `"iter"` | you want fully converged inner fits each round |
 | `rounds` | 200 joint, 30 iterative, 60 population | training was still improving when it stopped |
-| `cotangent` | closed form for an untransformed `add()`/`prop()` endpoint, exact otherwise | rarely — asking for the closed form on a transformed endpoint is an error |
+| `cotangent` | the Gaussian closed form for an untransformed `add()`/`prop()` endpoint, the distribution's own score for a count endpoint, the captured exact score otherwise | rarely — a source the endpoint cannot support is an error, not a silent fallback |
 | `lr`, `optimizer` | 0.03 (0.01 on a refit), Adam | the objective oscillates or moves too slowly |
 | `warmStart` | a population pre-fit, skipped when the model already carries trained weights | you want a longer or shorter pre-fit |
 
@@ -239,9 +239,23 @@ nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(rounds = 400, lr = 0.01))
   The default is smooth with a nonzero second derivative, which matters because
   the model Jacobian and the FOCEi sensitivities are chained through it.
 - **Hidden layers**: one. `n_hidden` is a single width.
-- **Endpoints**: one, with any normal-distribution residual model — `add()`,
-  `prop()`, both, or a transformation such as `lnorm()`. Count and categorical
-  endpoints are not supported yet.
+- **Endpoints**: one. Any normal-distribution residual model — `add()`, `prop()`,
+  both, or a transformation such as `lnorm()` — and the count endpoints `pois()`
+  and `binom()`.
+
+  A count endpoint differs in one way worth knowing. For `y ~ pois(lam)` there is
+  no "prediction" to differentiate: the model's prediction *is* the log-density,
+  so the network's effect is chained through the distribution's own parameter
+  (`lam`) instead, and the score is that distribution's derivative. Two
+  consequences: `nnControl(cotangent = "exact")` does not apply and is refused,
+  and **the parameter must be positive by construction** — write
+  `lam <- exp(nn(...))` rather than letting a rate wander negative, which aborts
+  the likelihood evaluation. For `binom(n, p)` the network drives `p`; the size
+  `n` must reach the solve, so bind it to a data column (`n <- ntrials`) rather
+  than writing a bare constant, which the model compiler folds away.
+
+  Other distributions (`nbinom()`, ordinal, and the rest) are refused with a
+  message naming the reason, not fitted wrongly.
 - **Networks per model**: several; they are trained together, and `nnEval(net=)`
   selects between them.
 - **Estimators**: any standard one. `"focei"` and the variational methods

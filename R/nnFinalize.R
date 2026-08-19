@@ -72,6 +72,10 @@
   assign("sticky", unique(c(.sticky, "nnMeta")), envir = .storedUi)
   .nnMarkTrained(.storedUi, ctx$aug)
   assign("ui", .storedUi, envir = .fitEnv)
+  ## the schedule the fit actually ran under.  Everything in it is INFERRED --
+  ## the user typically writes no nnControl() at all -- so without this there is
+  ## no way to see which cotangent source, mode or round count was chosen.
+  assign("nnSched", ctx$sched, envir = .fitEnv)
   assign("nnParHist", parHist, envir = .fitEnv)
   assign("nnWeights", .trained, envir = .fitEnv)
   assign("nnConverged", converged, envir = .fitEnv)

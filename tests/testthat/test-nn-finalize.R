@@ -46,7 +46,7 @@ test_that("the finalizer attaches the network, driven from a synthetic ctx", {
   ui <- suppressWarnings(suppressMessages(rxode2::rxode2(m)))
   aug <- .nnAugmentFromUi(rxode2::rxUiDecompress(ui))
   ## the whole ctx this phase needs -- no fit, no torch, no solve
-  ctx <- list(aug = aug)
+  ctx <- list(aug = aug, sched = nnControl())
   fit <- list(env = local({ e <- new.env(); assign("ui", ui, envir = e); e }))
 
   w <- seq_along(aug$weights) / 10
@@ -58,6 +58,8 @@ test_that("the finalizer attaches the network, driven from a synthetic ctx", {
   expect_equal(get("nnParHist", envir = e), hist)
   expect_true(get("nnConverged", envir = e))
   expect_equal(get("nnRounds", envir = e), 1L)
+  ## the inferred schedule travels with the fit, since the user never wrote it
+  expect_equal(get("nnSched", envir = e), ctx$sched)
 
   ## and the stored ui is self-contained: values in forcedPars, shapes in nnMeta,
   ## both sticky, so a fresh session can stride the weight block
