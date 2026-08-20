@@ -71,6 +71,22 @@
     .grad <- list()
     for (.net in aug$nets) {                            # per-network gradient + step
       .dLLdw <- vapply(.net$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
+      ## A non-finite gradient must never reach the optimizer.  One torch step
+      ## against NaN puts NaN in every weight, and there is no recovering from
+      ## that: every later solve, score and objective is NaN too, while the fit
+      ## still returns an object with a number in it.  Refusing here turns the
+      ## whole class of causes -- a diverged solve, an unusable score, a data row
+      ## that should not have been in the sum -- into something the user can see.
+      if (!all(is.finite(.dLLdw))) {
+        stop(sprintf(paste0(
+          "nlmixr2nn: the weight gradient for network %s is not finite ",
+          "(%d of %d components; %d of %d observations have a non-finite score, ",
+          "%d a non-finite prediction).  The optimizer is not stepped, because a ",
+          "single non-finite step makes every weight NaN for the rest of the fit."),
+          .net$id, sum(!is.finite(.dLLdw)), length(.dLLdw),
+          sum(!is.finite(.dLLdf)), length(.dLLdf), sum(!is.finite(.f))),
+          call. = FALSE)
+      }
       .grad[[as.character(.net$id)]] <- unname(.dLLdw)
       if (step) {
         nnTorchZeroGrad(.net$id)

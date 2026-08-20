@@ -82,9 +82,25 @@
          paste(c("ID", "TIME", "DV")[is.na(c(.idCol, .timeCol, .dvCol))],
                collapse = ", "), call. = FALSE)
   }
-  .obs <- if (is.na(.evidCol)) rep(TRUE, nrow(.data)) else .data[[.evidCol]]
-  .obs <- is.na(.obs) | .obs == 0
   .dv <- .data[[.dvCol]]
+  ## An OBSERVATION is EVID 0 *with a DV*.  Rows carrying no DV -- a dropped
+  ## sample, a BLQ record, a placeholder time -- are not observations to anyone:
+  ## nlmixr2est never evaluates them, so its likelihood hook never numbers them,
+  ## and they contribute nothing to a likelihood.
+  ##
+  ## Counting them here did two things, both silent.  The captured cotangent is
+  ## keyed by (subject, observation index), so one missing DV shifted every
+  ## later index and the exact score could not be matched at all.  Worse, the
+  ## closed-form score of a missing DV is NA, and one NA in a sum makes the whole
+  ## weight gradient NA -- torch then wrote NaN into every weight and the fit
+  ## returned, objective and all, saying nothing.  Measured: a single missing DV
+  ## in a 30-row data set took a converging fit (objf 598) to NaN weights.
+  .obs <- if (is.na(.evidCol)) rep(TRUE, nrow(.data)) else .data[[.evidCol]]
+  .obs <- (is.na(.obs) | .obs == 0) & !is.na(.dv)
+  if (!any(.obs)) {
+    stop("nlmixr2nn: the fitting data has no observation rows (EVID 0 with a ",
+         "non-missing DV)", call. = FALSE)
+  }
   .origTablesCov <- .nnStashTablesCov(.innerCtl)
   .innerCtl <- .nnDisableTablesCov(.innerCtl)
   ## refit of a reloaded fit (fresh session): the model text already carries

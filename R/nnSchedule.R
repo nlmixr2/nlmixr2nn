@@ -64,10 +64,14 @@
   .isNlm <- .est %in% .nnNlmOptimizers
   .knob <- .nnInterleaveKnob(.ctl)
   .resumes <- !is.null(.knob) && !(.est %in% .nnNonResuming)
+  ## the same definition of "observation" the engine uses (R/nnEst.R): EVID 0
+  ## WITH a DV.  Only a sizing heuristic here, but two masks that disagree are a
+  ## trap for whoever reads them next.
   .nObs <- tryCatch({
     .d <- env$data
-    .e <- .d[[if ("EVID" %in% names(.d)) "EVID" else "evid"]]
-    sum(is.na(.e) | .e == 0)
+    .e <- .d[[.nnDataCol(.d, "EVID")]]
+    .y <- .d[[.nnDataCol(.d, "DV")]]
+    sum((is.na(.e) | .e == 0) & !is.na(.y))
   }, error = function(e) NA_integer_)
 
   ## ---- guards: refuse combinations that cannot mean what they look like -----
