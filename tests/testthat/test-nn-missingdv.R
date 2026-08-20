@@ -59,7 +59,7 @@ test_that("a row with no DV is not an observation", {
   assign("control", nlmixr2est::foceiControl(print = 0L), envir = env)
   skip_if_no_torch()
   ctx <- .nnRunCtx(env, .nnInferSched(env))
-  on.exit(for (n in ctx$aug$nets) tryCatch(nnTorchFree(n$id), silent = TRUE), add = TRUE)
+  on.exit(for (n in ctx$aug$nets) try(nnTorchFree(n$id), silent = TRUE), add = TRUE)
   expect_equal(sum(ctx$obs), nrow(d) - 1L)
   expect_false(ctx$obs[3L])
   expect_false(anyNA(ctx$dv[ctx$obs]))
@@ -121,7 +121,7 @@ test_that("a non-finite weight gradient is refused, not stepped", {
     nnTorchInit(net$id, net$K, net$H, act = net$act)
     nnTorchSetWeights(net$id, rep(0.2, length(net$gIdx)))
   }
-  on.exit(for (net in aug$nets) tryCatch(nnTorchFree(net$id), silent = TRUE), add = TRUE)
+  on.exit(for (net in aug$nets) try(nnTorchFree(net$id), silent = TRUE), add = TRUE)
   d <- .mdvData(2L)
   obs <- rep(TRUE, nrow(d))
   dv <- d$DV

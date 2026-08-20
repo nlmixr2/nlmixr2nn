@@ -39,11 +39,23 @@
     assign("training", FALSE, envir = .nnEnv)
   }, add = TRUE)
 
+  ## Clear the compiled shape registry on the way out, whatever happened.
+  ##
+  ## The registry is a flat array keyed by a MODEL-LOCAL id, so every
+  ## single-network model is network 0 -- the entry this fit wrote is exactly the
+  ## entry the NEXT fit's network 0 would read.  On the success path the ui-prep
+  ## hook rebinds per solve and nothing shows.  On a FAILED fit nothing rebinds,
+  ## and the stale shape outlives the model it described: a fit whose network
+  ## took two inputs, followed by one whose network takes one, made nnForward
+  ## stride a two-input block through a one-input parameter vector.  That is not
+  ## a wrong number, it is a segfault -- observed, from an errored fit two cells
+  ## earlier in a smoke sweep, and not reproducible on its own.
+  on.exit(try(nnClearMeta(), silent = TRUE), add = TRUE)
   ctx <- .nnRunCtx(env, sched)
   ## registered where the single-frame version registered it: after setup, so a
   ## throw inside .nnRunCtx leaks the modules exactly as it did before.  Freeing
   ## them on a failed setup too is a behaviour change, not a move.
-  on.exit(for (.net in ctx$aug$nets) tryCatch(nnTorchFree(.net$id), silent = TRUE),
+  on.exit(for (.net in ctx$aug$nets) try(nnTorchFree(.net$id), silent = TRUE),
           add = TRUE)
 
   if (ctx$innerEst %in% .nnNlmOptimizers) return(.nnRunPopFit(ctx))

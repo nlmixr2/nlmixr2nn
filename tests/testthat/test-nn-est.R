@@ -113,8 +113,12 @@ test_that("iterative nn training injects NN input covariates (covariate-NN)", {
 
   ## the trained network learned the WT effect: cl increases with WT, matching
   ## the true exp(0.5*WT) trend (the covariate genuinely reached the NN)
-  nnSetWeights(0L, f$nnWeights)
-  clhat <- vapply(c(-0.8, 0, 0.8), function(w) exp(nn2(0L, w, 0)), numeric(1))
+  ##
+  ## Read through nnEval(), which takes the shapes and weights from the FIT.
+  ## Calling the compiled nn2() directly would instead read whatever the C shape
+  ## registry happened to still hold -- state the engine clears when a fit ends,
+  ## precisely so that one model's network cannot be evaluated as another's.
+  clhat <- exp(nnEval(f, WT = c(-0.8, 0, 0.8), eta.nn = 0)$value)
   expect_true(clhat[1] < clhat[2] && clhat[2] < clhat[3])
   expect_lt(abs(clhat[3] / clhat[1] - exp(0.5 * 1.6)), 0.6)
 })

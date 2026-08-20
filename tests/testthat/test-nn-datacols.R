@@ -36,7 +36,7 @@ test_that("the weight gradient does not depend on how the columns are spelled", 
     nnTorchInit(net$id, net$K, net$H, act = net$act)
     nnTorchSetWeights(net$id, stats::setNames(rep(0.2, length(net$gIdx)), NULL))
   }
-  on.exit(for (net in aug$nets) tryCatch(nnTorchFree(net$id), silent = TRUE), add = TRUE)
+  on.exit(for (net in aug$nets) try(nnTorchFree(net$id), silent = TRUE), add = TRUE)
 
   lower <- data.frame(id = rep(1:3, each = 4), time = rep(1:4, 3), evid = 0,
                       dv = c(6.1, 4.8, 3.9, 3.1, 5.9, 4.7, 3.8, 3.0,
