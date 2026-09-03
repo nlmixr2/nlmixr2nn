@@ -66,40 +66,66 @@
 #'   poorly conditioned region -- so raise it only when you want a stronger
 #'   fixed-effects starting point (e.g. a population/UDE model with no random
 #'   effect).
-#' @param l2 weight-decay strength.  Adds `l2 * sum(Weff^2)` over the weight
-#'   MATRICES to the objective the weight step minimizes; biases stay free, so the
+#' @param l2 strength of an L2 penalty on the network's weights -- the same idea
+#'   as ridge regression, and what machine learning calls weight decay.  The name
+#'   is the L2 norm: the penalty is the SUM OF SQUARED weights, so a weight costs
+#'   more the further it is from zero, and the fit prefers the flattest network
+#'   consistent with the data.  `l2` is how much that preference is worth relative
+#'   to fitting the observations; `0` expresses no preference at all.
+#'
+#'   Concretely it adds `l2 * sum(Weff^2)` over the weight MATRICES to the
+#'   objective the weight step minimizes.  Biases stay free, so the
 #'   network can still move its output level without paying for it.  `Weff` is the
 #'   effective weight -- the first layer is penalized on `scale * W1`, because
 #'   input scaling is folded into `W1` (see `nnScale.R`) and raw `W1` therefore
 #'   means something different for a covariate of magnitude 500 than for one of
-#'   magnitude 1.  A light penalty is applied by DEFAULT: an unregularized network
-#'   invents covariate-driven variation, and it does so silently.  `0` turns it
-#'   off exactly.
+#'   magnitude 1.  A latent eta's input column is exempt too: the eta reaches the
+#'   model only through the network, so shrinking those weights would shrink the
+#'   random effect itself.
 #'
-#'   The default is deliberately conservative -- set where it cannot hurt any
-#'   supported estimator/endpoint combination rather than where it does the most
-#'   good.  On a model that is visibly overfitting, `l2 = 1` is the value that
-#'   shrinks meaningfully (measured: weight norm down ~20% with the objective
-#'   improving), and is the knob to reach for first.
-#' @param smooth curvature (smoothness) penalty.  Adds `smooth * sum(C^2)` where
+#'   The value is a FRACTION, not an absolute amount: `l2 = 0.05` means the weight
+#'   term starts at 5% of the objective, which makes one value mean roughly the
+#'   same thing across endpoints, estimators and data sizes.
+#'
+#'   Defaults to `0` (off).  This is measured, not cautious: L2 shrinks toward the
+#'   zero function, and here the network IS the model, so any value large enough
+#'   to suppress structure the data does not support also attenuates structure it
+#'   does.  Reach for it when a fit is visibly overfitting -- `0.05` is where
+#'   shrinkage becomes substantial (on a test fixture, weight norm 11.5 -> 3.9
+#'   with the unpenalized objective improving) -- and check what the network
+#'   learned with [nnEval()], because real effects shrink alongside invented ones.
+#' @param smooth strength of a curvature penalty -- a roughness penalty in the
+#'   spline sense, asking the network to be a SMOOTH function of its inputs rather
+#'   than a small one.  Where `l2` pulls the network toward flat, `smooth` pulls it
+#'   toward gently curved, which is usually what you want from a learned covariate
+#'   relationship: a shape, not a straight line and not an interpolation of noise.
+#'
+#'   Concretely it adds `smooth * sum(C^2)` where
 #'   `C = f(x+h) - 2*f(x) + f(x-h)` is the second difference of the network along
 #'   each input's marginal curve, that input swept over its observed range with
 #'   the others held at their center.  Penalizing the SECOND derivative rather
 #'   than the first leaves monotone slopes free and charges only for the wiggles.
 #'   Inputs whose range is not knowable -- an eta, or a compound expression such
-#'   as `nn(central/Vc)` -- are held fixed rather than swept.  Applied by default;
-#'   `0` turns it off exactly.
+#'   as `nn(central/Vc)` -- are held fixed rather than swept.  Like `l2` it is a
+#'   fraction of the objective and defaults to `0`; the two are normalized
+#'   separately, because at equal lambda the raw curvature sum is orders of
+#'   magnitude smaller than the raw weight sum and the mix would otherwise be
+#'   arbitrary.
 #'
 #'   Both penalties shape the OPTIMIZATION only.  The reported `objf` (and hence
 #'   AIC/BIC) stays the unpenalized -2 log-likelihood, so a regularized network
 #'   model remains directly comparable to an analytic-covariate one.
 #' @param kinetic kinetic-energy (optimal-transport) penalty, as a FRACTION of
-#'   the objective.  `kinetic = 0.05` means the kinetic term starts at 5% of the
-#'   objective, whatever the endpoint, estimator or data size; the normalizer is
-#'   frozen once, from the first objective the fit produces, so the term is
-#'   inert for that first evaluation and live afterwards.  An absolute lambda
-#'   could not mean one thing across models -- the raw term's scale follows the
-#'   network's output scale, which follows the model.
+#'   the objective -- though in a weaker sense than `l2` and `smooth`.
+#'   `kinetic = 0.05` charges 5% of the objective per unit of the term, rather
+#'   than starting at exactly 5% of it: the objective side is normalized and the
+#'   term side is not.  That is deliberate.  `init = "ude"` starts the network
+#'   near the zero function on purpose, so normalizing this term against its own
+#'   starting value divides by something four orders of magnitude too small and
+#'   the penalty then dominates as soon as the network's output reaches its real
+#'   size (measured: a penalty of 566 against an objective of 76).  The
+#'   normalizer is frozen once, from the first objective the fit produces, so
+#'   the term is inert for that evaluation and live afterwards.
 #'
 #'   The term itself is `mean(f^2)`, where `f` is the network's output evaluated
 #'   at the JOINTLY REALIZED input rows of a trial solve -- the trajectory the

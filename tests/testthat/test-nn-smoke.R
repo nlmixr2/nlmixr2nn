@@ -34,10 +34,10 @@
   errLine <- switch(err, add = "centr ~ add(add.sd)", lnorm = "centr ~ lnorm(add.sd)")
   if (hasEta) {
     ini <- "add.sd <- 0.3; eta.nn ~ 0.2"
-    net <- "nn(centr, eta.nn, n_hidden = 3L, act = \"tanh\")"
+    net <- "nn(centr, eta.nn, nHidden = 3L, act = \"tanh\")"
   } else {
     ini <- "add.sd <- 0.3"
-    net <- "nn(centr, n_hidden = 3L, act = \"tanh\")"
+    net <- "nn(centr, nHidden = 3L, act = \"tanh\")"
   }
   eval(parse(text = sprintf(
     "function() { ini({ %s }); model({ g <- %s; d/dt(centr) <- -(1.0/(1.0 + exp(-g)))*centr; %s }) }",

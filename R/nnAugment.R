@@ -96,7 +96,8 @@ nnAugmentModel <- function(modelText, H) {
   .calls <- .nnParseCallAll(modelText)
   .multi <- length(.calls) > 1L
   .model <- rxode2::rxS(rxode2::rxGetModel(modelText), TRUE, promoteLinSens = FALSE)
-  .st <- rxode2::rxStateOde(.model); .ns <- length(.st)
+  .st <- rxode2::rxStateOde(.model)
+  .ns <- length(.st)
   invisible(rxode2::.rxJacobian(.model, .st))       ## F_X only (shared by all nets)
   .fx <- function(i, k) {
     .d <- get0(paste0("rx__df_", .st[i], "_dy_", .st[k], "__"), envir = .model, inherits = FALSE)
@@ -106,7 +107,9 @@ nnAugmentModel <- function(modelText, H) {
   .out <- unlist(strsplit(trimws(modelText), "\n", fixed = TRUE))
   .gj <- 0L                                          # running global weight index
   for (.call in .calls) {
-    .K <- .call$K; .Hn <- .hOf(.call$id); .nW <- .Hn * .K + 2L * .Hn + 1L
+    .K <- .call$K
+    .Hn <- .hOf(.call$id)
+    .nW <- .Hn * .K + 2L * .Hn + 1L
     .drdg <- .nnDrDg(.model, .st, .call)
     .suf <- if (.multi) sprintf("%d_", .call$id) else ""   # rx_drdg per-net suffix
     ## dR/dg outputs (read by the variational-state forcing)

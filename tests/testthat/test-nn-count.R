@@ -15,7 +15,7 @@
       model({
         k <- exp(lk)
         d/dt(centr) <- -k * centr
-        lam <- exp(nn(centr, n_hidden = 2L, act = "tanh")) + 0.5
+        lam <- exp(nn(centr, nHidden = 2L, act = "tanh")) + 0.5
         centr2 ~ pois(lam)
       })
     }
@@ -25,7 +25,7 @@
       ini({ lk <- -1 })
       model({
         k <- exp(lk)
-        d/dt(centr) <- -k * centr + nn(centr, n_hidden = 2L, act = "tanh")
+        d/dt(centr) <- -k * centr + nn(centr, nHidden = 2L, act = "tanh")
         lam <- centr / 4
         centr2 ~ pois(lam)
       })
@@ -116,7 +116,7 @@ test_that("the binomial weight gradient matches a finite difference", {
       ## rxode2 requires the size to be modeled, so it is bound to a data
       ## column -- which is also how a real trial data set carries it
       nsz <- ntrials
-      pr <- 1 / (1 + exp(-nn(centr, n_hidden = 2L, act = "tanh")))
+      pr <- 1 / (1 + exp(-nn(centr, nHidden = 2L, act = "tanh")))
       centr2 ~ binom(nsz, pr)
     })
   }
@@ -173,7 +173,7 @@ test_that("an unscorable distribution is refused, naming why", {
       k <- exp(lk)
       d/dt(centr) <- -k * centr
       sz <- 10
-      pr <- 1 / (1 + exp(-nn(centr, n_hidden = 2L, act = "tanh")))
+      pr <- 1 / (1 + exp(-nn(centr, nHidden = 2L, act = "tanh")))
       centr2 ~ nbinom(sz, pr)
     })
   }
@@ -219,7 +219,7 @@ test_that("cotangent = \"exact\" is refused on a count endpoint", {
     ini({ lk <- -1; add.sd <- 0.3 })
     model({
       k <- exp(lk)
-      d/dt(centr) <- -k * centr + nn(centr, n_hidden = 2L, act = "tanh")
+      d/dt(centr) <- -k * centr + nn(centr, nHidden = 2L, act = "tanh")
       centr ~ add(add.sd)
     })
   })
@@ -254,7 +254,7 @@ test_that("a Poisson UDE trains end to end", {
     model({
       k <- exp(lk)
       d/dt(centr) <- -k * centr
-      lam <- exp(nn(centr, n_hidden = 4L, act = "softplus"))
+      lam <- exp(nn(centr, nHidden = 4L, act = "softplus"))
       centr2 ~ pois(lam)
     })
   }

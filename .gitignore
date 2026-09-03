@@ -9,3 +9,6 @@ src/*.dll
 *.Rcheck
 src/Makevars
 src/Makevars.win
+
+# local code-index artifacts (vexp)
+.vexp/

@@ -28,7 +28,7 @@ test_that("a latent-input NN random effect fits with analytic (non-FD) sensitivi
   mod <- function() {
     ini({ tk <- 0.25; add.sd <- 0.3; eta.nn ~ 0.3 })
     model({
-      g <- nn(centr, eta.nn, n_hidden = 4L, act = "tanh")   # eta.nn is a latent input
+      g <- nn(centr, eta.nn, nHidden = 4L, act = "tanh")   # eta.nn is a latent input
       d/dt(centr) <- -(tk + 0.2 * tanh(g)) * centr
       centr ~ add(add.sd)
     })

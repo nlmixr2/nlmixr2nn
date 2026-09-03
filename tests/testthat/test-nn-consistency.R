@@ -17,7 +17,7 @@ test_that("a plain solve evaluates exactly the network its weights describe", {
   local_nn()
   m <- function() {
     model({
-      g <- nn(centr, n_hidden = 3L, act = "tanh")
+      g <- nn(centr, nHidden = 3L, act = "tanh")
       d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
     })
   }

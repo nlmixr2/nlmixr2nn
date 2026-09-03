@@ -141,7 +141,8 @@
     if (!grepl(.r, .rhs)) return(NA_character_)
     regmatches(.rhs, regexec(.r, .rhs))[[1L]][[2L]]
   }
-  .add <- .term("add"); .prop <- .term("prop")
+  .add <- .term("add")
+  .prop <- .term("prop")
   ## add/prop give the closed-form Gaussian cotangent; any OTHER error model (add
   ## and prop both NA, e.g. lnorm / transform-both-sides) still yields the endpoint
   ## state -- its cotangent then comes from the inner fit (cotangent = "exact").

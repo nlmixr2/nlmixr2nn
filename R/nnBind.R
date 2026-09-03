@@ -90,7 +90,9 @@
   ## / predict) for any of THIS ui's nets missing from the transient registry.
   .have <- if (length(.nnEnv$reg)) {
     vapply(.nnEnv$reg, function(m) m$id, integer(1))
-  } else integer(0)
+  } else {
+    integer(0)
+  }
   for (.m in .meta) {
     if (!(.m$id %in% .have)) .nnEnv$reg[[as.character(.m$id)]] <- .m
   }

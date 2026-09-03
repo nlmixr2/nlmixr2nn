@@ -40,7 +40,11 @@
   .par <- tryCatch(switch(est,
     nlminb   = stats::nlminb(w0, objf, grf,
                              control = list(iter.max = iters, eval.max = 3L * iters))$par,
-    nlm      = stats::nlm(function(w) { .r <- objf(w); attr(.r, "gradient") <- grf(w); .r },
+    nlm      = stats::nlm(function(w) {
+                            .r <- objf(w)
+                            attr(.r, "gradient") <- grf(w)
+                            .r
+                          },
                           w0, iterlim = iters)$estimate,
     optim    = stats::optim(w0, objf, grf, method = "BFGS",
                             control = list(maxit = iters))$par,
@@ -87,7 +91,8 @@
   ## swallowed by the tryCatch below, this whole exact-cotangent path silently
   ## fell back to the Gaussian score on every call and never once ran.
   .obj <- tryCatch(nlmixr2est:::nlmSolveR(.parIni), error = function(e) NA_real_)
-  .cap <- .nnCapGet(); .nnCapReset(FALSE)
+  .cap <- .nnCapGet()
+  .nnCapReset(FALSE)
   if (!is.finite(.obj) || is.null(.cap) || !length(.cap$id)) return(NULL)
   .dLLdf <- .cap$dLLdf[match(ctx$obsKey, .cap$id * ctx$capStride + .cap$k)]
   if (anyNA(.dLLdf)) return(NULL)
@@ -132,10 +137,10 @@
     ##
     ## This objective is already -2LL, the scale R/nnPenalty.R is defined on, so
     ## the penalty is added outright -- .nnAddPen(g, w, pen, 2L) by another name.
-    ## `kinetic` is a FRACTION of the objective, so its normalizer is frozen from
-    ## the first objective any evaluation produces -- here, where the objective
-    ## and the weights that produced it are both in hand.  Idempotent, so the
-    ## remaining evaluations just use it.
+    ## Freeze the penalty's normalizer from the first objective this fit
+    ## produces (R/nnPenalty.R): lambda is a FRACTION of the objective, and this
+    ## is the earliest point in a fit where an objective and the weights are both
+    ## in hand.  Idempotent -- only the first call sets it.
     .nnPenFreeze(pen, w, .obj)
     .pn <- .nnPenalty(pen, w)
     list(obj = .obj + .pn$value,
@@ -146,7 +151,8 @@
   .cache <- new.env(parent = emptyenv())
   .get <- function(w) {
     if (is.null(.cache$w) || !isTRUE(all.equal(w, .cache$w))) {
-      .cache$w <- w; .cache$v <- .eval(w)
+      .cache$w <- w
+      .cache$v <- .eval(w)
     }
     .cache$v
   }

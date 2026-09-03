@@ -88,7 +88,7 @@ test_that("a tanh network on PK-scale data keeps a usable input gradient", {
   skip_if_not_installed("rxode2")
   m <- function() {
     model({
-      y  <- nn(u, n_hidden = 5L, act = "tanh")
+      y  <- nn(u, nHidden = 5L, act = "tanh")
       dy <- nn1_d1(0, u)
       d/dt(A) <- -A * 0
     })

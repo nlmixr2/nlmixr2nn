@@ -32,7 +32,7 @@ test_that("a model needing derivatives builds with only the package attached", {
     m <- function() {
       ini({ add.sd <- 0.3 })
       model({
-        g <- nn(centr, n_hidden = 3L, act = "tanh")
+        g <- nn(centr, nHidden = 3L, act = "tanh")
         d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
         centr ~ add(add.sd)
       })

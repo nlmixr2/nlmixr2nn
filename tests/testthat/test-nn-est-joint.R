@@ -30,7 +30,7 @@ test_that("joint nn training co-optimizes params + weights and recovers MM+IIV",
 
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
-    model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    model({ g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
@@ -77,7 +77,7 @@ test_that("joint nn training interleaves a variational inner estimator (emvi ite
 
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
-    model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    model({ g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
@@ -119,7 +119,7 @@ test_that("nn training warm-starts from a model that already carries trained wei
 
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
-    model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    model({ g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
@@ -172,7 +172,7 @@ test_that("nlm-bridge population warm-start seeds the joint fit with a better st
 
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
-    model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    model({ g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }

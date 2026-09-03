@@ -9,76 +9,71 @@
 ##   smooth   punish wiggles specifically
 ##   kinetic  punish how hard the network pushes along the realized trajectory
 ##
-## All three shape the OPTIMIZATION only.  The reported objf (and hence AIC/BIC)
-## stays the unpenalized -2 log-likelihood, so a regularized network model is
-## still directly comparable to an analytic-covariate one.
-##
-## `kinetic` is the kinetic-energy / optimal-transport regularizer of the neural
-## ODE literature (Worsham & Kalita 2025, whose measured effect on a pendulum
-## NODE was the largest of any lever in their table -- mse 1.42 -> 0.70 AND a
-## shorter run, because the learned dynamics got easier to integrate; the idea is
-## from Finlay et al. 2020).  It is the one penalty here that pays for itself
-## twice for us: nnAugment.R carries nStates x nWeights variational states
-## alongside the primal, so every solver step a smoother RHS saves is multiplied
-## by the whole sensitivity block.  It is OFF by default, unlike l2/smooth,
-## because it is the only one that changes what the SOLVER does rather than only
-## where the optimizer goes.
+## Both shape the OPTIMIZATION only.  The reported objf (and hence AIC/BIC) stays
+## the unpenalized -2 log-likelihood, so a regularized network model is still
+## directly comparable to an analytic-covariate one.
 ##
 ## THE OBJECTIVE SCALE.  Everything here is on the -2LL scale -- the OFV the user
 ## sees:
 ##
-##   P = -2LL + l2 * sum(Weff^2) + smooth * sum(C^2) + kinetic * kK * mean(f^2)
+##   P = -2LL + l2 * kW * sum(Weff^2) + smooth * kC * sum(C^2)
+##             + kinetic * kK * mean(f^2)
 ##
-## Note sum for `smooth` and MEAN for `kinetic`.  That is not an inconsistency:
-## the curvature grid is a FIXED 11 points, so a sum over it is dataset-
-## independent, while the kinetic point set is however many rows the trial solve
-## produced.  Summing there would make one lambda mean something different for
-## every dataset -- a 2000-row study penalized 20x a 100-row one at identical
-## dynamics.
+## `kW` and `kC` are NORMALIZERS frozen at the first evaluation that knows an
+## objective, each chosen so that ITS OWN term starts out at exactly lambda times
+## the objective.  That is what makes lambda dimensionless: `l2 = 0.05` means
+## "the weight term starts at 5% of the objective", in any model, under any
+## estimator, on any endpoint.  The two terms are normalized SEPARATELY because
+## they are on wildly different natural scales -- at equal lambda the curvature
+## sum measured ~180x smaller than the weight sum -- so one shared normalizer
+## would leave the mix as arbitrary as the magnitude was.
 ##
-## `kinetic` IS A FRACTION OF THE OBJECTIVE, and `kK` is what makes it one:
+## Without it a single default cannot work.  The raw penalty is an ABSOLUTE
+## quantity while -2LL and its curvature vary a lot between endpoint types and
+## estimators, so a lambda that is light for an additive focei fit dominates a
+## lnorm saem one -- measured: l2 = 0.1 raw already drove the saem/lnorm smoke
+## cell's rmse UP, while l2 = 1 raw was needed before shrinkage was visible on an
+## overfitting additive fit.  Those two ranges did not overlap.  Normalizing
+## makes them the same range.
 ##
-##   kK = |objf| at the first objective the fit produces, frozen once
+## KINETIC IS NORMALIZED DIFFERENTLY, and the difference is deliberate.  `kK` is
+## just `abs(obj)` -- the objective side is normalized, the term side is not -- so
+## `kinetic = 0.05` charges 5% of the objective PER UNIT of mean(f^2) rather than
+## starting at exactly 5% of it.
 ##
-## so `kinetic = 0.05` charges 5% of the objective per unit of mean(f^2).  That
-## makes one value mean the same thing across endpoints, estimators and data
-## sizes, which is what varies most: -2LL scales with the number of observations
-## and jumps between endpoint types.  Until the normalizer is known the term
-## contributes exactly 0 -- a penalty at an unknown relative scale is the thing
-## normalization exists to prevent -- so it does not act on the first
-## evaluation.
+## Dividing by the term's own starting value, as kW and kC do, is degenerate for
+## a term that measures the network's OUTPUT.  `init = "ude"` starts the network
+## near the zero function on purpose -- an untrained network has to be a small
+## perturbation of the mechanistic model -- so at the initial weights, on a 2x3
+## tanh net:
 ##
-## WHAT IT DELIBERATELY DOES NOT DO is divide by the term's own value at the
-## starting weights, which is the obvious way to make "starts at 5% of the
-## objective" literally true.  That reference is degenerate here.  The default
-## `init = "ude"` starts the network near the ZERO FUNCTION on purpose -- an
-## untrained network has to be a small perturbation of the mechanistic model --
-## so at w0, measured on a 2x3 tanh net:
-##
-##   sum(w^2)   = 1.6e+00     <- l2's reference: healthy
+##   sum(w^2)   = 1.6e+00     <- kW's reference: healthy
 ##   mean(f^2)  = 8.8e-05     <- kinetic's: 4 orders down
-##   sum(C^2)   = 3.9e-09     <- curvature's: 9 orders down
+##   sum(C^2)   = 3.9e-09     <- kC's: 9 orders down
 ##
-## Dividing by 8.8e-05 gives a normalizer ~11000x too large, and the term then
-## dominates the objective the moment the network's output grows to its real
-## size.  Measured: kinetic = 0.05 produced a penalty of 566 against an
-## objective of 76 and drove the fit somewhere much worse than no penalty at
-## all.  Any term that measures the network's OUTPUT rather than its WEIGHTS has
-## this problem, and curvature has it two orders worse than kinetic does.
+## A reference of 8.8e-05 makes the normalizer ~1e4 too large, and the term then
+## dominates the moment the network's output reaches its real size.  Measured
+## end-to-end with kK = |obj|/raw: kinetic = 0.05 produced a penalty of 566
+## against an objective of 76 and drove the fit well past unpenalized.  With
+## kK = |obj| the same fit gives 81 against 117, and the network's output energy
+## over the input range falls (1.328 -> 1.267), which is what the term is for.
 ##
-## So the objective side is normalized and the term side is not.  `kinetic` is a
-## fraction of the objective per unit mean(f^2), not a fraction of the objective
-## outright, and that is the honest description of it.
+## The light warm start is why this is not self-correcting: `warmPopIters = 3`
+## leaves the network still small when the freeze happens.  kC has the same
+## exposure two orders worse than kinetic does; it is not addressed here because
+## changing kC is a decision about `smooth`, not about this term.
 ##
-## `l2` and `smooth` are absolute here.  Normalizing them is in flight
-## elsewhere; when it lands, whatever it does about the reference above applies
-## to both of them too.
+## They are frozen, not recomputed, so P stays a fixed objective that a gradient
+## can descend rather than a moving target.  Until it is known the penalty is
+## INACTIVE (contributes exactly 0): a penalty applied at an unknown relative
+## scale is the thing this normalizer exists to prevent.
 ##
 ## The two places a weight gradient is assembled do NOT share that scale:
 ## R/nnWeightStep.R works in -LL, R/nnPopFit.R in -2LL.  That is why .nnAddPen()
 ## takes a `scale` and why the invariant
 ##
-##   2 * .nnAddPen(g, w, pen, 1L) == .nnAddPen(2 * g, w, pen, 2L)
+##   twice the -LL-scale addition equals the -2LL-scale addition of twice the
+##   gradient
 ##
 ## is asserted in tests/testthat/test-nn-penalty.R.  Do not "simplify" either
 ## call site without re-reading that test: getting it wrong makes one lambda mean
@@ -100,11 +95,27 @@
 ##
 ## W2 is already scale-free and gets 1.  Biases get 0 -- they stay free, so the
 ## network can still move its output level without paying for it.
-.nnL2Mult <- function(K, H, scales) {
+##
+## A LATENT ETA's input column gets 0 as well, and that exemption is what makes a
+## nonzero default possible at all.  The eta reaches the model only THROUGH the
+## network, so shrinking the weights it multiplies shrinks the random effect
+## itself: penalizing the network and identifying a latent eta pull against each
+## other directly, by construction rather than by degree.  Measured, without the
+## exemption: at a lambda strong enough to shrink visibly the eta recovery
+## correlation collapsed from >0.7 to 0.14, while every lambda weak enough to
+## keep recovery left the weight norm within 0.3% of unpenalized.  The safe and
+## the useful range simply did not meet.
+##
+## Exempting the eta column removes the conflict rather than splitting the
+## difference: the penalty still shrinks the network's response to states and
+## covariates, which is where invented structure actually lives, and leaves the
+## random effect's own channel alone.
+.nnL2Mult <- function(K, H, scales, exempt = logical(K)) {
   .m <- numeric(H * K + 2L * H + 1L)
   if (length(scales) != K || !all(is.finite(scales))) scales <- rep(1, K)
+  if (length(exempt) != K) exempt <- logical(K)
   for (j in seq_len(H) - 1L) {
-    for (k in seq_len(K)) .m[j * K + k] <- scales[k]^2
+    for (k in seq_len(K)) .m[j * K + k] <- if (exempt[k]) 0 else scales[k]^2
   }
   .m[(H * K + H + 1L):(H * K + 2L * H)] <- 1
   .m
@@ -158,17 +169,15 @@
 ## instead.  Column-binding two frames of different length would fabricate input
 ## combinations that never happened, which is precisely what this penalty exists
 ## to avoid.
-##
-## Returns NULL when no input has realized values: the term would then be
-## evaluated at the single center point, which is a legitimate number but not a
-## meaningful one, and saying so once beats charging for it silently.
 .nnPenPoints <- function(profile, K, nMax = .nnPenN) {
   .vals <- lapply(profile, function(.p) .p$values)
   .has <- !vapply(.vals, is.null, logical(1))
   if (!any(.has)) return(NULL)
   .n <- unique(vapply(.vals[.has], length, integer(1)))
   if (length(.n) != 1L || .n < 1L) return(NULL)
-  .i <- if (.n <= nMax) seq_len(.n) else {
+  .i <- if (.n <= nMax) {
+    seq_len(.n)
+  } else {
     unique(as.integer(round(seq(1, .n, length.out = nMax))))
   }
   .center <- vapply(profile, function(.p) as.numeric(.p$center), numeric(1))
@@ -201,12 +210,19 @@
   .nets <- tryCatch(lapply(seq_along(aug$nets), function(.i) {
     .n <- aug$nets[[.i]]
     .p <- if (is.null(profiles)) NULL else profiles[[.i]]
-    .sc <- if (is.null(.p)) rep(1, .n$K) else {
+    .sc <- if (is.null(.p)) {
+      rep(1, .n$K)
+    } else {
       vapply(.p, function(.q) as.numeric(.q$scale), numeric(1))
+    }
+    .exempt <- if (is.null(.p)) {
+      logical(.n$K)
+    } else {
+      vapply(.p, function(.q) identical(.q$kind, "eta"), logical(1))
     }
     list(id = .n$id, K = .n$K, H = .n$H, nW = .n$nW, gIdx = .n$gIdx,
          act = .nnActCode[[.n$act]],
-         mult = .nnL2Mult(.n$K, .n$H, .sc),
+         mult = .nnL2Mult(.n$K, .n$H, .sc, .exempt),
          grids = if (smooth > 0 && !is.null(.p)) .nnPenGrids(.p, .n$K, M) else list(),
          pts = if (kinetic > 0 && !is.null(.p)) .nnPenPoints(.p, .n$K) else NULL)
   }), error = function(e) NULL)
@@ -230,82 +246,49 @@
     message("nn: no network input has a realized trajectory (the trial solve ",
             "carries none of them), so nnControl(kinetic=) has nothing to act on")
   }
-  ## The normalizer lives in an ENVIRONMENT so that freezing it is visible to
+  ## The normalizer lives in an environment so that freezing it is visible to
   ## every closure already holding the spec -- the weight stepper captures `pen`
   ## once, at construction, long before any objective exists.
   list(nets = .nets, nW = aug$nW, l2 = l2, smooth = smooth, kinetic = kinetic,
        env = local({
          .e <- new.env(parent = emptyenv())
+         .e$kW <- NA_real_
+         .e$kC <- NA_real_
          .e$kK <- NA_real_
          .e
        }))
 }
 
-## The kinetic term for ONE network, UNWEIGHTED (no lambda, no normalizer), so
-## that the same code serves both freezing the normalizer and applying it.
-.nnPenKinTerm <- function(spec, w) {
-  if (is.null(spec$pts)) return(list(value = 0, grad = numeric(length(w))))
-  .N <- nrow(spec$pts)
-  .f <- .Call(`_nlmixr2nn_nnForwardW`, spec$K, spec$H, spec$act,
-              as.double(w), spec$pts)
-  ## d(out)/dw at every point: nW x N, so the chain is one matrix-vector product
-  ## rather than a loop.  As in the curvature term, the explicit-weight form is
-  ## the only correct one -- the registry-based nnWeightGrad reads the live
-  ## solve's par_ptr and returns zeros outside a solve.
-  .J <- vapply(seq_len(.N), function(.r) {
-    .Call(`_nlmixr2nn_nnWeightGradW`, spec$K, spec$H, spec$act,
-          as.double(w), as.double(spec$pts[.r, ]))
-  }, numeric(length(w)))
-  list(value = mean(.f^2), grad = (2 / .N) * as.numeric(.J %*% .f))
-}
-
-## The effective kinetic coefficient: the user's fraction times the normalizer.
-## 0 until the normalizer is frozen, which is what keeps an unnormalized penalty
-## from ever reaching a gradient.
-.nnKinEff <- function(pen) {
-  if (is.null(pen) || is.null(pen$kinetic) || pen$kinetic <= 0) return(0)
-  .k <- pen$env$kK
-  if (is.null(.k) || is.na(.k)) 0 else pen$kinetic * .k
-}
-
-## Freeze the kinetic normalizer from the first objective the fit produces.
-## Called from wherever an objective is in hand: the population fit's objective
-## evaluation (R/nnPopFit.R) and the round loop (R/nnEst.R).  Idempotent -- only
-## the first call sets it, so one fit has one meaning for `kinetic` throughout,
-## even though the objective moves as it converges.
-##
-## `w` is unused and kept in the signature deliberately: the obvious next change
-## is to divide by the term's value at `w`, and the header above records the
-## measurement showing why that is wrong here.
-.nnPenFreeze <- function(pen, w, obj) {
-  if (is.null(pen) || is.null(pen$kinetic) || pen$kinetic <= 0) return(invisible(NULL))
-  if (!is.na(pen$env$kK)) return(invisible(NULL))
-  if (is.null(obj) || !is.finite(obj)) return(invisible(NULL))
-  pen$env$kK <- abs(obj)
-  invisible(NULL)
-}
-
-## Freeze from `obj` if not set yet, then report the penalty at `w`.  The
-## population branch (R/nnEst.R) needs both in one expression, because its
-## parHist row is built in a single data.frame() call.
-.nnPenFrozenValue <- function(pen, w, obj) {
-  .nnPenFreeze(pen, w, obj)
-  .nnPenalty(pen, w)$value
-}
-
-## Value + gradient of the penalty for ONE network, on the -2LL scale.
+## The two penalty terms for ONE network, UNWEIGHTED (no lambda, no normalizer).
 ## `w` is that network's own weight vector, in nnWeightLayout() order.
-## `kinEff` is the ALREADY-NORMALIZED kinetic coefficient (.nnKinEff()), not the
-## user's fraction: normalization is a property of the whole model's term, so it
-## cannot be recomputed per network here.
-.nnPenaltyNet <- function(spec, w, l2, smooth, kinEff = 0) {
-  .val <- 0
-  .grad <- numeric(length(w))
-  if (l2 > 0) {
-    .val <- .val + l2 * sum(spec$mult * w^2)
-    .grad <- .grad + 2 * l2 * spec$mult * w
+## Returns each term's value and its gradient wrt w.
+.nnPenTerms <- function(spec, w, smooth, kinetic = FALSE) {
+  .wv <- sum(spec$mult * w^2)
+  .wg <- 2 * spec$mult * w
+  .cv <- 0
+  .cg <- numeric(length(w))
+  .kv <- 0
+  .kg <- numeric(length(w))
+  if (kinetic && !is.null(spec$pts)) {
+    ## mean(f^2) over the realized input rows: the network's contribution to the
+    ## derivative, averaged where the solution actually goes.  Squared rather
+    ## than the plain norm Worsham & Kalita's implementation uses, because ||.||
+    ## is not differentiable at 0 and init = "ude" starts a network very close to
+    ## exactly there.  MEAN, where the curvature term is a sum: the grid is a
+    ## fixed 11 points, but this point set is however many rows the solve
+    ## produced, and summing would make one lambda mean something different for
+    ## every study.
+    .N <- nrow(spec$pts)
+    .kf <- .Call(`_nlmixr2nn_nnForwardW`, spec$K, spec$H, spec$act,
+                 as.double(w), spec$pts)
+    .kJ <- vapply(seq_len(.N), function(.r) {
+      .Call(`_nlmixr2nn_nnWeightGradW`, spec$K, spec$H, spec$act,
+            as.double(w), as.double(spec$pts[.r, ]))
+    }, numeric(length(w)))
+    .kv <- mean(.kf^2)
+    .kg <- (2 / .N) * as.numeric(.kJ %*% .kf)
   }
-  if (smooth > 0 && length(spec$grids)) {
+  if (smooth && length(spec$grids)) {
     for (.g in spec$grids) {
       .M <- nrow(.g)
       if (.M < 3L) next
@@ -313,7 +296,7 @@
                   as.double(w), .g)
       .i <- seq.int(2L, .M - 1L)
       .C <- .f[.i + 1L] - 2 * .f[.i] + .f[.i - 1L]
-      .val <- .val + smooth * sum(.C^2)
+      .cv <- .cv + sum(.C^2)
       ## d(out)/dw at every grid point, once; each row then feeds up to three of
       ## the second differences above.  The registry-based nnWeightGrad reads the
       ## live solve's par_ptr and returns ZEROS outside a solve -- the explicit
@@ -324,38 +307,93 @@
       }, numeric(length(w)))
       for (.t in seq_along(.i)) {
         .m <- .i[.t]
-        .dC <- .J[, .m + 1L] - 2 * .J[, .m] + .J[, .m - 1L]
-        .grad <- .grad + 2 * smooth * .C[.t] * .dC
+        .cg <- .cg + 2 * .C[.t] * (.J[, .m + 1L] - 2 * .J[, .m] + .J[, .m - 1L])
       }
     }
   }
-  if (kinEff > 0 && !is.null(spec$pts)) {
-    ## mean(f^2) over the realized input rows: the network's contribution to the
-    ## derivative, averaged where the solution actually goes.  Squared rather
-    ## than the plain norm Worsham & Kalita's implementation uses, for one
-    ## practical reason -- ||.|| is not differentiable at 0, and a UDE network
-    ## initialized as a small perturbation of the mechanistic model
-    ## (init = "ude") starts very close to exactly there.
-    .t <- .nnPenKinTerm(spec, w)
-    .val <- .val + kinEff * .t$value
-    .grad <- .grad + kinEff * .t$grad
-  }
-  list(value = .val, grad = .grad)
+  list(l2 = list(value = .wv, grad = .wg), smooth = list(value = .cv, grad = .cg),
+       kinetic = list(value = .kv, grad = .kg))
 }
 
-## Value + gradient of the whole model's penalty, on the -2LL scale.
-## `w` is the GLOBAL weight vector (every network concatenated in aug$nets
-## order); the returned gradient matches it.
-.nnPenalty <- function(pen, w) {
-  if (is.null(pen)) return(list(value = 0, grad = numeric(length(w))))
-  .val <- 0
-  .grad <- numeric(length(w))
+## Both terms for the whole model, UNWEIGHTED.  `w` is the GLOBAL weight vector
+## (every network concatenated in aug$nets order); the gradients match it.
+.nnPenaltyRaw <- function(pen, w) {
+  .z <- list(l2 = list(value = 0, grad = numeric(length(w))),
+             smooth = list(value = 0, grad = numeric(length(w))),
+             kinetic = list(value = 0, grad = numeric(length(w))))
+  if (is.null(pen)) return(.z)
+  .out <- .z
   for (.s in pen$nets) {
-    .r <- .nnPenaltyNet(.s, w[.s$gIdx], pen$l2, pen$smooth, .nnKinEff(pen))
-    .val <- .val + .r$value
-    .grad[.s$gIdx] <- .grad[.s$gIdx] + .r$grad
+    .t <- .nnPenTerms(.s, w[.s$gIdx], pen$smooth > 0, isTRUE(pen$kinetic > 0))
+    for (.nm in c("l2", "smooth", "kinetic")) {
+      .out[[.nm]]$value <- .out[[.nm]]$value + .t[[.nm]]$value
+      .out[[.nm]]$grad[.s$gIdx] <- .out[[.nm]]$grad[.s$gIdx] + .t[[.nm]]$grad
+    }
   }
-  list(value = .val, grad = .grad)
+  .out
+}
+
+## TRUE once the normalizers are known and the penalty is live.
+.nnPenActive <- function(pen) {
+  !is.null(pen) && !is.na(pen$env$kW)
+}
+
+## Freeze the normalizers from the first objective the fit produces, so that each
+## term starts at `lambda * abs(obj)`.  Called from wherever an objective and the
+## weights are both in hand: the population fit's own objective evaluation
+## (R/nnPopFit.R) and the round loop's first inner fit (R/nnEst.R).  Idempotent --
+## only the first call sets them.
+##
+## A term whose raw value is 0 at the starting weights carries no scale
+## information (a flat network has no curvature to measure).  It is normalized to
+## 0, which switches that term off for this fit rather than dividing by zero --
+## and a term that starts at exactly zero has nothing to shrink anyway.
+.nnPenFreeze <- function(pen, w, obj) {
+  if (is.null(pen) || !is.na(pen$env$kW)) return(invisible(NULL))
+  if (is.null(obj) || !is.finite(obj)) return(invisible(NULL))
+  .r <- .nnPenaltyRaw(pen, w)
+  .k <- function(v) if (is.finite(v) && v > 0) abs(obj) / v else 0
+  ## the weight term is what arms the penalty: it is never legitimately zero for
+  ## a network with any nonzero weight, so if it is, something is wrong and the
+  ## penalty stays inactive rather than guessing a scale
+  if (!is.finite(.r$l2$value) || .r$l2$value <= 0) return(invisible(NULL))
+  pen$env$kW <- .k(.r$l2$value)
+  pen$env$kC <- .k(.r$smooth$value)
+  ## kinetic normalizes the OBJECTIVE side only -- see the header for the
+  ## measurement that rules out dividing by its raw value here
+  pen$env$kK <- abs(obj)
+  invisible(NULL)
+}
+
+## Value + gradient of the penalty as it actually enters the objective, on the
+## -2LL scale.  Zero while the normalizers are unknown: a penalty applied at an
+## unknown relative scale is the thing they exist to prevent.
+.nnPenalty <- function(pen, w) {
+  if (!.nnPenActive(pen)) return(list(value = 0, grad = numeric(length(w))))
+  .r <- .nnPenaltyRaw(pen, w)
+  .a <- pen$l2 * pen$env$kW
+  .b <- pen$smooth * pen$env$kC
+  .c <- .nnKinEff(pen)
+  list(value = .a * .r$l2$value + .b * .r$smooth$value + .c * .r$kinetic$value,
+       grad = .a * .r$l2$grad + .b * .r$smooth$grad + .c * .r$kinetic$grad)
+}
+
+## The effective kinetic coefficient: the user's fraction times the normalizer.
+## 0 until the normalizer is frozen, and 0 for a spec built before `kinetic`
+## existed -- a NULL there would make `> 0` a zero-length condition and error out
+## the whole fit rather than skipping the term.
+.nnKinEff <- function(pen) {
+  if (is.null(pen) || is.null(pen$kinetic) || !isTRUE(pen$kinetic > 0)) return(0)
+  .k <- pen$env$kK
+  if (is.null(.k) || is.na(.k)) 0 else pen$kinetic * .k
+}
+
+## Freeze the normalizers from `obj` if they are not set yet, then report the
+## penalty at `w`.  The population branch (R/nnEst.R) needs both in one
+## expression, because its parHist row is built in a single data.frame() call.
+.nnPenFrozenValue <- function(pen, w, obj) {
+  .nnPenFreeze(pen, w, obj)
+  .nnPenalty(pen, w)$value
 }
 
 ## Add the penalty to a gradient expressed on `scale` * (-LL).
@@ -365,13 +403,16 @@
 ##
 ## The penalty is defined on -2LL, so a -LL-scale gradient takes half of it.
 .nnAddPen <- function(g, w, pen, scale) {
-  if (is.null(pen)) return(g)
+  if (!.nnPenActive(pen)) return(g)
   g + .nnPenalty(pen, w)$grad * (scale / 2)
 }
 
 ## Same, for a single network's local gradient and weights.  Takes the whole
-## `pen` rather than loose lambdas so that the shared normalizer is in scope.
+## `pen` rather than one net's spec so that the shared normalizers are in scope.
 .nnAddPenNet <- function(g, w, pen, spec, scale) {
-  if (is.null(pen) || is.null(spec)) return(g)
-  g + .nnPenaltyNet(spec, w, pen$l2, pen$smooth, .nnKinEff(pen))$grad * (scale / 2)
+  if (!.nnPenActive(pen) || is.null(spec)) return(g)
+  .t <- .nnPenTerms(spec, w, pen$smooth > 0, isTRUE(pen$kinetic > 0))
+  g + (pen$l2 * pen$env$kW * .t$l2$grad +
+         pen$smooth * pen$env$kC * .t$smooth$grad +
+         .nnKinEff(pen) * .t$kinetic$grad) * (scale / 2)
 }

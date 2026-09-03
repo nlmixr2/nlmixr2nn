@@ -30,7 +30,7 @@
       ini({ lk <- -1.4; add.sd <- 0.2 })
       model({
         k <- exp(lk)
-        d/dt(centr) <- -k * centr + nn(centr, n_hidden = 3L, act = "softplus")
+        d/dt(centr) <- -k * centr + nn(centr, nHidden = 3L, act = "softplus")
         centr ~ add(add.sd)
       })
     }
@@ -39,7 +39,7 @@
       ini({ lk <- -1.4; add.sd <- 0.2 })
       model({
         k <- exp(lk)
-        d/dt(centr) <- -k * centr + nn(centr, n_hidden = 3L, act = "softplus")
+        d/dt(centr) <- -k * centr + nn(centr, nHidden = 3L, act = "softplus")
         centr ~ lnorm(add.sd)
       })
     }

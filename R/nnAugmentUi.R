@@ -150,7 +150,8 @@
     }
   }
   ## global weight index -> which network it belongs to, and its local index
-  .ownerOf <- integer(0); .localOf <- integer(0)
+  .ownerOf <- integer(0)
+  .localOf <- integer(0)
   for (.c in .calls) {
     .nWc <- as.integer(.hOfNet(.nets, .c$id) * .c$K + 2L * .hOfNet(.nets, .c$id) + 1L)
     .ownerOf <- c(.ownerOf, rep(.c$id, .nWc))

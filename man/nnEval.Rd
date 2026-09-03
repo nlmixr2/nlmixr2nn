@@ -38,7 +38,7 @@ grid built with [expand.grid()].
 \donttest{
 mod <- function() {
   model({
-    d/dt(central) <- -nn(central, n_hidden = 4L)
+    d/dt(central) <- -nn(central, nHidden = 4L)
   })
 }
 set.seed(1)

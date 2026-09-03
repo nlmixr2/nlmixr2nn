@@ -128,8 +128,9 @@ nnTorchGetGrad <- function(id) .Call(`_nlmixr2nn_nnTorchGetGrad`, as.integer(id)
 #' @param grad numeric gradient vector of length `H*K + 2*H + 1`.
 #' @return invisibly NULL.
 #' @keywords internal
-nnTorchSetGrad <- function(id, grad)
+nnTorchSetGrad <- function(id, grad) {
   invisible(.Call(`_nlmixr2nn_nnTorchSetGrad`, as.integer(id), as.double(grad)))
+}
 
 #' Optimizer step; also syncs updated weights into the loader buffer
 #' @param id network id.
@@ -153,7 +154,8 @@ nnTorchStep <- function(id) invisible(.Call(`_nlmixr2nn_nnTorchStep`, as.integer
 #' @return numeric vector of the loss at each step.
 #' @keywords internal
 nnTorchTrain <- function(id, X, target, steps = 200L, lr = 0.05, type = "adam") {
-  X <- as.matrix(X); target <- as.double(target)
+  X <- as.matrix(X)
+  target <- as.double(target)
   nnTorchOptInit(id, type, lr)
   loss <- numeric(steps)
   for (s in seq_len(steps)) {

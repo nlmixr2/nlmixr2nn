@@ -40,7 +40,7 @@ mod <- function() {
     Vc <- exp(lVc)
     d/dt(depot)   <- -ka * depot
     ## a 6-unit network of the central amount enters the elimination
-    d/dt(central) <-  ka * depot - nn(central, n_hidden = 6)
+    d/dt(central) <-  ka * depot - nn(central, nHidden = 6)
     cp <- central / Vc
   })
 }
@@ -106,7 +106,7 @@ d <- do.call(rbind, lapply(1:8, function(id) {
 ude <- function() {
   ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
   model({
-    g <- nn(centr, eta.nn, n_hidden = 3, act = "tanh")
+    g <- nn(centr, eta.nn, nHidden = 3, act = "tanh")
     d/dt(centr) <- -(1 / (1 + exp(-g))) * centr     # a bounded learned rate
     centr ~ add(add.sd)
   })
@@ -176,7 +176,7 @@ qd <- do.call(rbind, lapply(1:6, function(id) {
 qsp <- function() {
   ini({ add.sd <- 0.3 })                     # residual error only -- no eta
   model({
-    g <- nn(centr, n_hidden = 3, act = "tanh")
+    g <- nn(centr, nHidden = 3, act = "tanh")
     d/dt(centr) <- -(1 / (1 + exp(-g))) * centr
     centr ~ add(add.sd)
   })
@@ -236,8 +236,8 @@ nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(rounds = 400, lr = 0.01))
 | `cotangent` | the Gaussian closed form for an untransformed `add()`/`prop()` endpoint, the distribution's own score for a count endpoint, the captured exact score otherwise | rarely — a source the endpoint cannot support is an error, not a silent fallback |
 | `lr`, `optimizer` | 0.03 (0.01 on a refit), Adam | the objective oscillates or moves too slowly |
 | `warmStart` | a population pre-fit, skipped when the model already carries trained weights | you want a longer or shorter pre-fit |
-| `l2`, `smooth` | off | the network looks over-fitted |
-| `kinetic` | off | the learned term looks stiff, or the augmented solve is slow |
+| `l2`, `smooth` | `0` -- no penalty on the weights or on curvature | a fitted network looks wigglier than the data can justify (see below) |
+| `kinetic` | `0` | the learned term is stiff, or the augmented solve is slow |
 
 ### Regularization, when a network learns too much
 
@@ -246,47 +246,73 @@ covariate curve with sharp wiggles in it, or per-subject variation that should
 have gone to the random effect. It does this silently: the fit converges, the
 objective looks fine, and only the learned shape gives it away.
 
-Three penalties are available for that, and **all three are off by default**:
+Two penalties are available for that, and they express different preferences.
+`l2` is an L2-norm penalty on the weights — ridge regression, or weight decay in
+machine-learning terms — which charges a weight for being far from zero and so
+prefers the flattest network the data will allow. `smooth` is a roughness penalty
+in the spline sense: it charges for the *second* derivative of the network along
+each input, so a monotone slope is free and only the wiggles are paid for. Put
+plainly, `l2` asks the network to be small and `smooth` asks it to be smooth,
+which is usually what you want from a learned covariate relationship — a shape,
+not a straight line and not an interpolation of the noise. Biases are never penalized, and neither is a latent eta's input column —
+the eta reaches the model only through the network, so shrinking those weights
+would shrink the random effect itself.
 
-- `l2` shrinks the weights.
-- `smooth` charges for curvature specifically, penalizing the *second*
-  derivative of the network along each input, which leaves a monotone slope free
-  and pays only for the wiggles.
-- `kinetic` asks the network to reach the same data while pushing less hard,
-  charging for its output along the trajectory the model actually produces
-  rather than on a grid of input combinations that may never occur.
-
-Biases are never penalized, so the network can still move its output level for
-nothing.
+Both are a **fraction of the objective**, not an absolute amount: `l2 = 0.05`
+means the weight penalty starts at 5% of the objective, so one value means
+roughly the same thing whatever the endpoint, estimator or data size.
 
 ```{r, eval = FALSE}
 fit <- nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(l2 = 0.05))
 plot(nnEval(fit, centr = seq(0, 10, length.out = 101)))
 ```
 
-Off by default is a decision, not caution. In these models the network *is* the
-model, so a penalty large enough to suppress structure the data does not support
-is also large enough to attenuate structure it does. Reach for one deliberately,
-when a fitted curve looks wigglier than the data can justify — and look at what
-the network learned with `nnEval()` afterwards rather than trusting the objective
-alone, because real effects shrink alongside invented ones.
+**Both default to `0`.** That is a measured choice, not a cautious one. `l2`
+shrinks the network toward the zero function, and in these models the network
+*is* the model — so any value large enough to suppress structure the data does
+not support is also large enough to attenuate structure it does. On the package's
+own recovery tests, every value from `1e-3` up cost a real covariate effect, and
+every value that preserved them moved the weight norm by less than half a percent.
 
-`kinetic` is the one to reach for when the *solve* is the problem rather than the
-shape: it makes the learned dynamics easier to integrate, so it can make a fit
-faster as well as smoother. Unlike the other two it changes the dynamics being
-solved, not just where the optimizer goes.
+So reach for it deliberately, when a fitted curve looks wigglier than the data can
+justify. `l2 = 0.05` is where shrinkage becomes substantial — on a test fixture
+with no true covariate effect it took the weight norm from 11.5 to 3.9 while the
+unpenalized objective *improved*. Always look at what the network learned with
+`nnEval()` afterwards rather than trusting the objective alone: real effects
+shrink alongside invented ones.
 
-`kinetic` is a **fraction of the objective**: `kinetic = 0.05` means the term
-starts at 5% of the objective, so one value means roughly the same thing whatever
-the endpoint, estimator or data size. Its normalizer is frozen from the first
-objective the fit produces, so it is inert for that first evaluation.
+A third penalty, `kinetic`, asks a different question. `l2` and `smooth` are about
+the *shape* of the learned function; `kinetic` is about the *dynamics* it
+produces. It charges for the network's output along the trajectory the model
+actually solves — how hard the network is pushing where the solution really goes,
+rather than on a grid of input combinations that may never occur — and so asks
+the model to reach the same data by pushing less hard.
+
+```{r, eval = FALSE}
+fit <- nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(kinetic = 0.05))
+```
+
+That makes the learned dynamics easier to integrate, so it can make a fit *faster*
+as well as smoother — which matters here because the training solve carries a
+sensitivity state for every state-weight pair, so every solver step saved is
+multiplied. It defaults to `0` for a reason of its own on top of the one above:
+it is the only one of the three that changes the dynamics being solved rather
+than only steering the optimizer.
+
+`kinetic` is a fraction of the objective too, though in a weaker sense than `l2`
+and `smooth`: `kinetic = 0.05` charges 5% of the objective per unit of the term,
+rather than starting at exactly 5% of it. The difference is deliberate and
+`vignette("nlmixr2nn-node")` explains it — briefly, the default initialization
+starts the network near the zero function on purpose, so normalizing this term
+against its own starting value would divide by something four orders of magnitude
+too small.
 
 All three shape the optimization only. The reported `objf` — and so AIC and BIC —
 stays the unpenalized -2 log-likelihood, so a regularized network model is still
 directly comparable to one with an analytic covariate relationship.
-`vignette("nlmixr2nn-node")` explains where `kinetic` comes from, how it differs
-from `smooth`, and which other ideas from the neural ODE literature do and do not
-carry over to a model like this one.
+`vignette("nlmixr2nn-node")` covers where `kinetic` comes from and which other
+ideas from the neural ODE literature do and do not carry over to a model like
+this one.
 
 ## What is supported
 
@@ -294,7 +320,7 @@ carry over to a model like this one.
 - **Activations**: `"softplus"` (default), `"tanh"`, `"relu"`, `"gelu"`, `"silu"`.
   The default is smooth with a nonzero second derivative, which matters because
   the model Jacobian and the FOCEi sensitivities are chained through it.
-- **Hidden layers**: one. `n_hidden` is a single width.
+- **Hidden layers**: one. `nHidden` is a single width.
 - **Endpoints**: one. Any normal-distribution residual model — `add()`, `prop()`,
   both, or a transformation such as `lnorm()` — and the count endpoints `pois()`
   and `binom()`.

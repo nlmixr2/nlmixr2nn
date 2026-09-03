@@ -53,7 +53,7 @@ call and a declaration of the weights:
 library(nlmixr2nn)
 mod <- function() {
   model({
-    d/dt(centr) <- -nn(centr, n_hidden = 3) * centr
+    d/dt(centr) <- -nn(centr, nHidden = 3) * centr
   })
 }
 rxode2::rxSetSeed(1)
@@ -276,7 +276,7 @@ A short list, each of which cost real time:
 
 ## The weight penalty
 
-`R/nnPenalty.R`. Two terms, both optional, both on by default:
+`R/nnPenalty.R`. Two terms, both opt-in (`nnControl(l2 = , smooth = )`, both `0` by default):
 
 $$P = -2\log L + \lambda_{2}\sum W_{\text{eff}}^2 + \lambda_{s}\sum C^2$$
 
@@ -297,6 +297,30 @@ autodiff and no new C code.
 gradient vector is returned untouched, and the fit is bit-identical to an
 unregularized one.
 
+### Lambda is a fraction, not an amount
+
+Each term carries a normalizer, frozen at the first evaluation that knows an
+objective (the population pre-fit's own objective, or the first inner fit in the
+round loop):
+
+$$k_W = \frac{|\text{objf}|}{\sum W_{\text{eff}}^2}, \qquad
+  k_C = \frac{|\text{objf}|}{\sum C^2}$$
+
+so that each term *starts* at exactly $\lambda$ times the objective. They are
+frozen rather than recomputed, so $P$ stays a fixed objective a gradient can
+descend rather than a moving target; until they are known the penalty is
+inactive and contributes exactly zero.
+
+The two terms are normalized **separately** because their raw scales differ by
+orders of magnitude — measured at ~180× — so one shared normalizer would leave
+the mix between them as arbitrary as the magnitude was.
+
+This is not cosmetic. Under the earlier absolute penalty the E5.5 smoke matrix
+broke at `l2 = 0.1` (the `saem`/`lnorm` cell's RMSE rose instead of falling)
+while visible shrinkage on an over-fitting fit needed `l2 = 1` — the safe range
+and the effective range did not overlap. After normalizing, the whole matrix
+passes to `l2 = 0.3` and the objective-optimal value is `0.05`.
+
 ## Extending
 
 - **An activation**: `.nnActCode` (R), `nnAct`/`nnActD`/`nnActD2` in
@@ -307,7 +331,7 @@ unregularized one.
 - **Another estimator**: teach `.nnEstSolveParams()` which model it solves, and
   `.nnInterleaveKnob()`/`.nnNonResuming` whether its partial fit resumes.
 - **Depth**: `.nnInitDraw()` and the weight layout already take `H` as a vector;
-  the compiled evaluators do not. `nn()` refuses a vector `n_hidden` explicitly
+  the compiled evaluators do not. `nn()` refuses a vector `nHidden` explicitly
   so that boundary is visible.
 
 ## Where to look when something is wrong

@@ -20,7 +20,9 @@
   ## uses the closed-form additive/proportional-Gaussian cotangent.
   ## the penalty spec keyed by network id, so the per-net lookup inside the step
   ## is a name match rather than a scan
-  .penOf <- if (is.null(pen)) NULL else {
+  .penOf <- if (is.null(pen)) {
+    NULL
+  } else {
     stats::setNames(pen$nets, vapply(pen$nets, function(.s) as.character(.s$id),
                                      character(1)))
   }
