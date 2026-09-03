@@ -68,7 +68,9 @@
   assign("nnMeta", .nnMeta, envir = .storedUi)
   .sticky <- if (exists("sticky", envir = .storedUi, inherits = FALSE)) {
     get("sticky", envir = .storedUi, inherits = FALSE)
-  } else character(0)
+  } else {
+    character(0)
+  }
   assign("sticky", unique(c(.sticky, "nnMeta")), envir = .storedUi)
   .nnMarkTrained(.storedUi, ctx$aug)
   assign("ui", .storedUi, envir = .fitEnv)

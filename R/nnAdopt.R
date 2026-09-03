@@ -65,7 +65,9 @@
   }
   .sticky <- if (exists("sticky", envir = ui, inherits = FALSE)) {
     get("sticky", envir = ui, inherits = FALSE)
-  } else character(0)
+  } else {
+    character(0)
+  }
   assign("sticky", unique(c(.sticky, "nnMeta", "nnTrained")), envir = ui)
   invisible(TRUE)
 }
@@ -83,7 +85,9 @@
   assign("nnTrained", TRUE, envir = ui)
   .sticky <- if (exists("sticky", envir = ui, inherits = FALSE)) {
     get("sticky", envir = ui, inherits = FALSE)
-  } else character(0)
+  } else {
+    character(0)
+  }
   assign("sticky", unique(c(.sticky, "nnTrained")), envir = ui)
   invisible(TRUE)
 }

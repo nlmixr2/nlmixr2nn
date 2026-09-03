@@ -91,7 +91,9 @@
 ## Priority: a quantity the trial solve produced (state or lhs) -> a column of
 ## the data (covariate) -> an eta (already order 1 by construction, so 1) -> 1.
 .nnScalesForNet <- function(inputs, trial, data, etaNames) {
-  .ok <- if (is.null(trial)) character(0) else {
+  .ok <- if (is.null(trial)) {
+    character(0)
+  } else {
     names(trial)[is.finite(trial) & trial > 0]
   }
   vapply(inputs, function(.in) {
@@ -128,7 +130,9 @@
 ## and returns 1 -- the right answer today, so the bug would stay invisible.
 .nnInputProfile <- function(inputs, trial, data, etaNames) {
   .scales <- .nnTrialScales(trial)
-  .ok <- if (is.null(.scales)) character(0) else {
+  .ok <- if (is.null(.scales)) {
+    character(0)
+  } else {
     names(.scales)[is.finite(.scales) & .scales > 0]
   }
   .summarize <- function(v) {

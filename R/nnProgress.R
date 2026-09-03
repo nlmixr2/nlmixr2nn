@@ -11,8 +11,11 @@
 
 .nnProgressStart <- function(rounds, quiet) {
   if (isTRUE(quiet) || !interactive()) return(NULL)
-  .ok <- tryCatch({ rxode2::rxProgress(as.integer(rounds)); TRUE },
-                  error = function(e) FALSE)
+  .ok <- tryCatch({
+      rxode2::rxProgress(as.integer(rounds))
+      TRUE
+    },
+    error = function(e) FALSE)
   if (.ok) list(rounds = as.integer(rounds)) else NULL
 }
 
@@ -58,12 +61,14 @@
     .h <- do.call(rbind, parHist)
     if (is.null(.h) || !nrow(.h) || is.null(.h$pen)) NULL else .h$pen[nrow(.h)]
   }, error = function(e) NULL)
+  .penTxt <- if (!is.null(.pen) && is.finite(.pen) && .pen > 0) {
+    sprintf(" (+ %.4g penalty)", .pen)
+  } else {
+    ""
+  }
+  .chgTxt <- if (interleave) sprintf(" | objf change %.2g", objfChange) else ""
   message(sprintf("    objective %.4g%s | weight change %.2g%s", objf,
-                  if (!is.null(.pen) && is.finite(.pen) && .pen > 0) {
-                    sprintf(" (+ %.4g penalty)", .pen)
-                  } else "",
-                  wChange,
-                  if (interleave) sprintf(" | objf change %.2g", objfChange) else ""))
+                  .penTxt, wChange, .chgTxt))
   if (!is.null(.rmse) && all(is.finite(.rmse))) {
     message(sprintf("    rmse %.4g -> %.4g", .rmse[1L], .rmse[2L]))
   }

@@ -9,8 +9,10 @@
 .nnEvalR <- function(id, kind, j, l, ...) {
   m <- cbind(...)
   storage.mode(m) <- "double"
-  id <- as.integer(id[1]); kind <- as.integer(kind)
-  j <- as.integer(j); l <- as.integer(l)
+  id <- as.integer(id[1])
+  kind <- as.integer(kind)
+  j <- as.integer(j)
+  l <- as.integer(l)
   vapply(seq_len(nrow(m)),
          function(i) .Call(`_nlmixr2nn_nnEval`, id, m[i, ], kind, j, l),
          numeric(1))
@@ -23,7 +25,8 @@
 .nnWgEvalR <- function(id, j, ...) {
   m <- cbind(...)
   storage.mode(m) <- "double"
-  id <- as.integer(id[1]); j <- as.integer(j)
+  id <- as.integer(id[1])
+  j <- as.integer(j)
   vapply(seq_len(nrow(m)), function(i) {
     g <- .Call(`_nlmixr2nn_nnWeightGrad`, id, m[i, ])
     if (length(g) > j) g[j + 1L] else NA_real_
