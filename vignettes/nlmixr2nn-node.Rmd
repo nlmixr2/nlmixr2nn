@@ -186,8 +186,35 @@ d/dt(centr) <- -f(nn(centr))
 is exactly the one-dimensional non-crossing case: the learned flow is
 constrained in a way that has nothing to do with how well it is fitted.
 
-`nlmixr2nn` has no first-class `aug =` argument yet. Two things reduce the sting
-in practice, and neither is quite the same fix:
+`nlmixr2nn` has no first-class `aug =` argument yet, and the reason is worth
+recording because it is a property of where `nn()` runs rather than of the
+construction. A `nn()` term expands during parsing and can only emit code around
+the line it sits on, so an augmented `d/dt()` lands next to the `nn()` call
+rather than after every compartment the user declared. rxode2 numbers
+compartments by first `d/dt()` appearance, so the augmentation *takes* a
+compartment number, and `cmt = 1` in the data then doses the latent instead of
+the model's first compartment. Measured on a UDE fit: the dose landed in the
+augmented state, `centr` stayed at 0 for the entire profile, and the fit looked
+like a training failure when nothing was ever being trained. A UDF cannot see
+the model's states to prevent it (`rxUdfUiMv()` is `NULL` while parsing), so the
+fix is to append the augmented compartments at model-assembly time, where the
+whole model is visible.
+
+Two other findings from that work are settled and will carry over:
+
+* **The augmented state must relax, not integrate.** The textbook drift
+  `d/dt(a) = f(x, a)` is self-exciting here -- `a` re-enters its own derivative
+  through the network, and an unbounded activation makes that exponential. The
+  latent reached 1e154 by `t = 5` and the solver gave up. `d/dt(a) = f(x, a) - a`
+  has a stable fixed point at `f`, still adds the dimension the non-crossing
+  argument needs, and costs a fixed memory timescale of one model time unit.
+* **The sensitivity machinery already handles it.** The forward variational
+  block for a two-network, two-state augmented model matches finite differences
+  of the likelihood to ~1e-7 relative, for both networks
+  (`test-nn-augsens.R`). Whatever else augmentation needs, the gradient is not
+  it.
+
+Meanwhile, two things reduce the sting, and neither is quite the same fix:
 
 * **Extra inputs.** The recommended pattern passes a latent random effect into
   the network (`nn(centr, eta.nn)`), and covariates can be passed the same way.
@@ -196,7 +223,19 @@ in practice, and neither is quite the same fix:
   dimensions, so it is not the ANODE construction.
 * **Extra compartments.** Nothing stops you writing the augmented states
   yourself as ordinary compartments with `nn()` terms in their right-hand sides.
-  This is the real construction, at the cost of writing it out.
+  This is the real construction, at the cost of writing it out -- and, written
+  by hand, your compartments keep their numbers:
+
+  ```{r, eval = FALSE}
+  model({
+    d/dt(a1)    <- nn(centr, a1) - a1     # the augmented dimension
+    g           <- nn(centr, a1)
+    d/dt(centr) <- -(1 / (1 + exp(-g))) * centr
+  })
+  ```
+
+  Declare it after the compartments your data doses into, and give the relaxing
+  `- a1` term its due: without it the latent runs away.
 
 ## What is deliberately absent
 

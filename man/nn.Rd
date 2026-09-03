@@ -37,10 +37,13 @@ deviation for `init = "ude"`, and the standard deviation of every weight
 for `init = "normal"`.}
 
 \item{aug}{number of AUGMENTED states to add (0-3, default 0) -- the ANODE
-  construction of Dupont et al. (2019).  **Experimental and not yet usable:**
-  the augmented states are built and solved correctly, but training an
-  augmented network is not reliable yet and can fit much worse than
-  `aug = 0`.  It warns when used.  `aug = k` creates `k` extra
+  construction of Dupont et al. (2019).  **Not available yet: any value above
+  0 is an error.**  Augmenting from inside `nn()` would renumber the model's
+  compartments (the augmented state takes a `d/dt()` slot next to the `nn()`
+  call, so `cmt` in the data stops meaning what it means in the model), and a
+  UDF cannot see the model's states to prevent that.  Doing it at model
+  assembly instead is the fix.  Write the augmentation by hand meanwhile --
+  see `vignette("nlmixr2nn-node")`.  `aug = k` creates `k` extra
   compartments `rx_nnaug<id>_1..k`, starts them at zero, gives each its own
   learned derivative, and passes all of them to this network as additional
   inputs.  It is exactly what you would get by writing

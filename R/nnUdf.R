@@ -66,10 +66,13 @@ rxUdfUi.nn <- function(fun) {
 #'   deviation for `init = "ude"`, and the standard deviation of every weight
 #'   for `init = "normal"`.
 #' @param aug number of AUGMENTED states to add (0-3, default 0) -- the ANODE
-#'   construction of Dupont et al. (2019).  **Experimental and not yet usable:**
-#'   the augmented states are built and solved correctly, but training an
-#'   augmented network is not reliable yet and can fit much worse than
-#'   `aug = 0`.  It warns when used.  `aug = k` creates `k` extra
+#'   construction of Dupont et al. (2019).  **Not available yet: any value above
+#'   0 is an error.**  Augmenting from inside `nn()` would renumber the model's
+#'   compartments (the augmented state takes a `d/dt()` slot next to the `nn()`
+#'   call, so `cmt` in the data stops meaning what it means in the model), and a
+#'   UDF cannot see the model's states to prevent that.  Doing it at model
+#'   assembly instead is the fix.  Write the augmentation by hand meanwhile --
+#'   see `vignette("nlmixr2nn-node")`.  `aug = k` creates `k` extra
 #'   compartments `rx_nnaug<id>_1..k`, starts them at zero, gives each its own
 #'   learned derivative, and passes all of them to this network as additional
 #'   inputs.  It is exactly what you would get by writing
@@ -132,17 +135,34 @@ nn <- function(..., n_hidden = 5L,
                               .var.name = "aug")
   aug <- as.integer(aug)
   if (aug > 0L) {
-    ## EXPERIMENTAL, and the warning is not boilerplate.  The construction is
-    ## right -- the states are created, zero-initialized, registered and solved --
-    ## but training an augmented model does NOT yet work: measured on a
-    ## population UDE fit, aug = 1 lands far worse than aug = 0 under bobyqa,
-    ## lbfgsb3c and nlminb alike, while both networks' weights move.  The weight
-    ## gradient through the augmented sensitivity path has not been
-    ## finite-difference checked yet, and that is the next thing to do.
-    warning("nn(aug=) is EXPERIMENTAL: the augmented states solve correctly, ",
-            "but training an augmented network is not yet reliable and can fit ",
-            "much worse than aug = 0.  Do not use it for real work yet.",
-            call. = FALSE)
+    ## REFUSED, for a reason that cannot be fixed from inside this function.
+    ##
+    ## `rxUdfUi()` can only emit code around the line it is expanding (`before`
+    ## / `after`), so an augmented `d/dt()` lands next to the user's nn() call
+    ## rather than after every compartment they declared.  rxode2 numbers
+    ## compartments by first `d/dt()` appearance, so the augmentation TAKES a
+    ## compartment number from the model -- and `cmt = 1` in the data then doses
+    ## the latent instead of the user's first compartment.  Measured: the dose
+    ## landed in rx_nnaug0_1, `centr` stayed at 0 for the whole profile, and the
+    ## fit "failed to train" because there was nothing for it to train on.
+    ##
+    ## Emitting the lines via `after` only narrows the window (it still breaks
+    ## the common `g <- nn(centr, ...)` form, where the nn() line precedes every
+    ## d/dt), and a UDF cannot see the model's states to pin them first --
+    ## `rxUdfUiMv()` is NULL while parsing.
+    ##
+    ## The fix is to append the augmented compartments at MODEL-ASSEMBLY time,
+    ## where the whole model is visible, rather than at parse time.  Everything
+    ## else this function builds for `aug` is correct and stays: the leaky drift,
+    ## the id allocation, and the multi-network forward sensitivity, which is
+    ## finite-difference verified in test-nn-augsens.R.
+    stop("nn(aug=) is not available yet.  Augmenting from here would renumber ",
+         "your compartments -- the augmented state takes a d/dt() slot next to ",
+         "the nn() call, so `cmt` in the data would no longer mean what it ",
+         "means in your model.  Add the extra compartments by hand for now:\n",
+         "    d/dt(a1) <- nn(centr, a1) - a1\n",
+         "    g        <- nn(centr, a1)\n",
+         "See vignette(\"nlmixr2nn-node\").", call. = FALSE)
   }
   ## capture positional inputs symbolically (do NOT evaluate them)
   .dots <- as.list(substitute(list(...)))[-1L]
