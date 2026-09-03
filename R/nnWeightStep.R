@@ -12,11 +12,18 @@
 ## endpoint distribution's own derivative for a count endpoint -- assembles
 ## dLL/dw = sum_obs dLL/df * rx_predsw, and takes one torch optimizer step.
 ## Returns the RMSE.
-.nnWeightStepper <- function(aug, data, idCol, timeCol, obs, dv, wPlaceholder) {
+.nnWeightStepper <- function(aug, data, idCol, timeCol, obs, dv, wPlaceholder,
+                             pen = NULL) {
   ## weightStep(ebes, errPar, thetas, dLLdfObs = NULL): dLLdfObs, when supplied, is
   ## the per-observation error-model cotangent captured from the inner fit (the
   ## EXACT dLL/df for any residual model), aligned to the observation rows; NULL
   ## uses the closed-form additive/proportional-Gaussian cotangent.
+  ## the penalty spec keyed by network id, so the per-net lookup inside the step
+  ## is a name match rather than a scan
+  .penOf <- if (is.null(pen)) NULL else {
+    stats::setNames(pen$nets, vapply(pen$nets, function(.s) as.character(.s$id),
+                                     character(1)))
+  }
   function(ebes, errPar, thetas, dLLdfObs = NULL, step = TRUE) {
     .ad <- data
     for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- ebes[as.character(.ad[[idCol]])]
@@ -89,8 +96,26 @@
       }
       .grad[[as.character(.net$id)]] <- unname(.dLLdw)
       if (step) {
+        ## The likelihood gradient above is on the -LL scale, the penalty is
+        ## defined on -2LL, and .nnAddPen() closes that gap -- see the header of
+        ## R/nnPenalty.R before changing either side of this.  `pen = NULL`
+        ## (lambda 0) returns the vector untouched, so an unregularized fit is
+        ## bit-identical to one built without this call.
+        .g <- -.dLLdw
+        if (!is.null(pen)) {
+          .wNet <- nnTorchWeights(.net$id)
+          .g <- .nnAddPenNet(.g, .wNet, .penOf[[as.character(.net$id)]],
+                             pen$l2, pen$smooth, 1L)
+          if (!all(is.finite(.g))) {
+            stop(sprintf(paste0(
+              "nlmixr2nn: the weight penalty made the gradient for network %s ",
+              "non-finite (%d of %d components).  The optimizer is not stepped. ",
+              "Lower nnControl(l2=)/nnControl(smooth=), or set them to 0."),
+              .net$id, sum(!is.finite(.g)), length(.g)), call. = FALSE)
+          }
+        }
         nnTorchZeroGrad(.net$id)
-        nnTorchSetGrad(.net$id, -.dLLdw)
+        nnTorchSetGrad(.net$id, .g)
         nnTorchStep(.net$id)
       }
     }

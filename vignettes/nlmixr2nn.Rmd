@@ -231,6 +231,45 @@ nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(rounds = 400, lr = 0.01))
 | `cotangent` | the Gaussian closed form for an untransformed `add()`/`prop()` endpoint, the distribution's own score for a count endpoint, the captured exact score otherwise | rarely — a source the endpoint cannot support is an error, not a silent fallback |
 | `lr`, `optimizer` | 0.03 (0.01 on a refit), Adam | the objective oscillates or moves too slowly |
 | `warmStart` | a population pre-fit, skipped when the model already carries trained weights | you want a longer or shorter pre-fit |
+| `l2`, `smooth` | a light penalty on the weights and on curvature, applied by default | the network still looks over-fitted, or you want the unpenalized fit back |
+
+### Regularization is on by default
+
+A network with more capacity than the data supports will invent structure — a
+covariate curve with sharp wiggles in it, or per-subject variation that should
+have gone to the random effect. It does this silently: the fit converges, the
+objective looks fine, and only the learned shape gives it away.
+
+So two penalties are applied by default. `l2` shrinks the weights; `smooth`
+charges for curvature specifically, penalizing the *second* derivative of the
+network along each input, which leaves a monotone slope free and pays only for
+the wiggles. Biases are never penalized, so the network can still move its output
+level for nothing.
+
+Both shape the optimization only. The reported `objf` — and so AIC and BIC — stays
+the unpenalized -2 log-likelihood, which means a regularized network model is
+still directly comparable to one with an analytic covariate relationship.
+
+To turn regularization off completely:
+
+```{r, eval = FALSE}
+nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(l2 = 0, smooth = 0))
+```
+
+That reproduces an unpenalized fit exactly — zero is a strict no-op, not a small
+number.
+
+The defaults are set conservatively: low enough not to disturb any supported
+estimator and endpoint combination, which is lower than the value that does the
+most good on a model that really is over-fitting. So if a fitted curve still
+looks wigglier than the data can justify, raise `l2` — around `1` is where
+shrinkage becomes substantial — and check the result with `nnEval()` and
+`plot()`:
+
+```{r, eval = FALSE}
+fit <- nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(l2 = 1))
+plot(nnEval(fit, centr = seq(0, 10, length.out = 101)))
+```
 
 ## What is supported
 

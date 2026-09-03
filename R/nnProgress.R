@@ -51,7 +51,18 @@
   }, error = function(e) NULL)
   message(sprintf("nn: %s training %s after %d round%s", .how, .why, nRun,
                   if (nRun == 1L) "" else "s"))
-  message(sprintf("    objective %.4g | weight change %.2g%s", objf, wChange,
+  ## the penalty share, when there is one -- the reported objective is the
+  ## UNPENALIZED -2LL, so without this the number the loop converged on is
+  ## invisible
+  .pen <- tryCatch({
+    .h <- do.call(rbind, parHist)
+    if (is.null(.h) || !nrow(.h) || is.null(.h$pen)) NULL else .h$pen[nrow(.h)]
+  }, error = function(e) NULL)
+  message(sprintf("    objective %.4g%s | weight change %.2g%s", objf,
+                  if (!is.null(.pen) && is.finite(.pen) && .pen > 0) {
+                    sprintf(" (+ %.4g penalty)", .pen)
+                  } else "",
+                  wChange,
                   if (interleave) sprintf(" | objf change %.2g", objfChange) else ""))
   if (!is.null(.rmse) && all(is.finite(.rmse))) {
     message(sprintf("    rmse %.4g -> %.4g", .rmse[1L], .rmse[2L]))

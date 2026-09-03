@@ -132,7 +132,41 @@
     ## trained weights ARE the warm start; re-running the population pre-fit
     ## would throw them away
     warmStart = if (hasTrained) "none" else "lbfgsb3c",
-    warmPopIters = 3L)
+    warmPopIters = 3L,
+    ## Regularization is ON by default (R/nnPenalty.R).  An unregularized network
+    ## invents covariate-driven variation and says nothing about it, so the
+    ## unpenalized fit is the wrong default even though it is the historical one.
+    ## Deliberately light: enough to damp runaway weight growth on a null
+    ## structure, not enough to flatten a network that is fitting something real.
+    ## The penalty is O(1) while -2LL is O(n observations), so a constant lambda
+    ## self-weakens as the data grows -- which is the behavior you want.
+    ## nnControl(l2 = 0, smooth = 0) reproduces an unregularized fit exactly.
+    ## These are calibrated, and deliberately conservative.  Two sweeps set them:
+    ##
+    ## What the penalty CAN do, on a null covariate structure that does overfit
+    ## (nnSimData(iiv = FALSE), 30 subjects, n_hidden = 8, 10 rounds):
+    ##   l2 = 1    weight norm 11.5 -> 8.9, curvature -37%, and objf IMPROVES
+    ##   smooth = 100  curvature 1.65e-3 -> 9.3e-4
+    ##   (at smooth = 1000 the weight norm climbs back as the network compensates
+    ##    with larger canceling weights -- the over-constraint signature)
+    ##
+    ## What it may SAFELY do by default, across the E5.5 smoke matrix
+    ## (focei/saem/impmap/emvi x add/lnorm, each asserting that training
+    ## descends): l2 = 0.1 already breaks the saem + lnorm cell, whose rmse rises
+    ## instead of falling.  0.01 is the largest value that leaves all eight cells
+    ## descending.
+    ##
+    ## Those two ranges do not overlap, and that is worth understanding rather
+    ## than tuning around: the penalty is an ABSOLUTE quantity added to -2LL,
+    ## while the network's weight scale and the likelihood's curvature vary a lot
+    ## between endpoint types and estimators.  A lambda that is light for an
+    ## additive focei fit dominates a lnorm saem one.  Making lambda dimensionless
+    ## -- scaling the penalty by the number of observations, so it stays a fixed
+    ## FRACTION of the objective -- is what would let one default be both safe and
+    ## effective.  Until then the default is set where it cannot hurt any
+    ## supported combination, and `nnControl(l2 = 1)` is the documented knob for a
+    ## model that is visibly overfitting.
+    l2 = 0.01, smooth = 1)
 
   if (.isNlm) {
     ## The population branch has only the closed-form Gaussian score available

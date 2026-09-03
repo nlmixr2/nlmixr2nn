@@ -40,20 +40,50 @@
   if (!is.finite(.s) || .s <= 0) 1 else .s
 }
 
-## Typical magnitude of every model quantity, from ONE solve of the model at its
-## initial estimates over the real data.  This is what makes the scale
+## ONE solve of the model at its initial estimates over the real data, reduced to
+## its numeric columns.  This is what makes everything derived from it
 ## data-derived rather than guessed: a state's magnitude depends on the dosing
 ## and the time grid, neither of which can be read off the model alone.
-## Returns a named numeric vector, or NULL if the trial solve fails (in which
-## case the caller falls back to the data columns alone).
-.nnTrialScales <- function(ui, data) {
+##
+## Returns the data.frame, or NULL if the trial solve fails.  The FRAME rather
+## than a summary of it, because two callers want two different summaries: input
+## scaling wants one typical magnitude per column, and the curvature penalty
+## (R/nnPenalty.R) wants the quantiles that say where a network's inputs actually
+## live.  Collapsing here would throw the latter away -- which is exactly what
+## this function used to do.
+.nnTrialSolve <- function(ui, data) {
   .s <- tryCatch(
     suppressWarnings(rxode2::rxSolve(ui, data, returnType = "data.frame")),
     error = function(e) NULL)
   if (is.null(.s) || !is.data.frame(.s) || nrow(.s) == 0L) return(NULL)
   .num <- vapply(.s, is.numeric, logical(1))
-  .out <- vapply(.s[.num], .nnTypicalScale, numeric(1))
-  .out[!(names(.out) %in% c("id", "time"))]
+  .s <- .s[.num]
+  .s[!(names(.s) %in% c("id", "time"))]
+}
+
+## Typical magnitude of every model quantity, as a named numeric vector.
+## NULL in, NULL out.
+.nnTrialScales <- function(trial) {
+  if (is.null(trial) || !is.data.frame(trial) || !ncol(trial)) return(NULL)
+  vapply(trial, .nnTypicalScale, numeric(1))
+}
+
+## Where an input's values come from.  THE single place the priority order
+## lives, so the scaling and the penalty cannot drift apart: an eta beats a
+## solved quantity, which beats a data column (matched case-insensitively,
+## because data columns are conventionally upper case); anything else -- a
+## compound expression such as `nn(central/Vc)` -- has no source at all.
+##
+## `trialNames` must already be filtered to the columns that yield a USABLE
+## value, so that an unusable solved quantity falls through to the data exactly
+## as it always has.
+.nnInputSource <- function(nm, trialNames, dataNames, etaNames) {
+  .nm <- trimws(nm)
+  if (.nm %in% etaNames) return(list(kind = "eta", col = NA_character_))
+  if (.nm %in% trialNames) return(list(kind = "trial", col = .nm))
+  .hit <- dataNames[toupper(dataNames) == toupper(.nm)]
+  if (length(.hit) > 0L) return(list(kind = "data", col = .hit[1L]))
+  list(kind = "expr", col = NA_character_)
 }
 
 ## Scale for each input of one network, in the order the inputs appear in nn().
@@ -61,26 +91,69 @@
 ## Priority: a quantity the trial solve produced (state or lhs) -> a column of
 ## the data (covariate) -> an eta (already order 1 by construction, so 1) -> 1.
 .nnScalesForNet <- function(inputs, trial, data, etaNames) {
-  .dataScale <- function(nm) {
-    .hit <- names(data)[toupper(names(data)) == toupper(nm)]
-    if (length(.hit) == 0L) return(NA_real_)
-    .nnTypicalScale(data[[.hit[1L]]])
+  .ok <- if (is.null(trial)) character(0) else {
+    names(trial)[is.finite(trial) & trial > 0]
   }
   vapply(inputs, function(.in) {
-    .nm <- trimws(.in)
-    ## an eta is a standardized random effect: it is already order 1, and
-    ## dividing it out would change what the model means
-    if (.nm %in% etaNames) return(1)
-    if (!is.null(trial) && .nm %in% names(trial)) {
-      .v <- trial[[.nm]]
-      if (is.finite(.v) && .v > 0) return(.v)
-    }
-    .d <- .dataScale(.nm)
-    if (is.finite(.d) && .d > 0) return(.d)
-    ## a compound expression (e.g. nn(central/Vc)) has no single source; leave it
-    ## unscaled rather than guess, and say so at the call site
-    1
+    .src <- .nnInputSource(.in, .ok, names(data), etaNames)
+    switch(.src$kind,
+           ## an eta is a standardized random effect: it is already order 1, and
+           ## dividing it out would change what the model means
+           eta = 1,
+           trial = trial[[.src$col]],
+           data = {
+             .d <- .nnTypicalScale(data[[.src$col]])
+             if (is.finite(.d) && .d > 0) .d else 1
+           },
+           ## a compound expression (e.g. nn(central/Vc)) has no single source;
+           ## leave it unscaled rather than guess
+           1)
   }, numeric(1), USE.NAMES = FALSE)
+}
+
+## Everything the curvature penalty needs to know about one network's inputs:
+## per input, its typical magnitude, a center to hold it at while the OTHER
+## inputs are swept, and the range to sweep it over.
+##
+## `trial` is the data.frame from .nnTrialSolve() (NULL if it failed), so the
+## range is where the inputs actually go over the real dosing and time grid,
+## not a guess.  An input with no resolvable range -- an eta, whose EBEs move
+## every round and which is not a solve column at all, or a compound expression
+## -- gets range = NA and is simply held at its center, never gridded.
+##
+## `etaNames` must carry BOTH spellings of every eta.  The augmented model
+## renames `eta.nn` to `eta_nn` (R/nnAugmentUi.R), so inputs parsed from it are
+## sanitized while `ui$eta` is not; matching against one spelling alone silently
+## fails to recognize an eta, which then falls through to the data lookup, misses,
+## and returns 1 -- the right answer today, so the bug would stay invisible.
+.nnInputProfile <- function(inputs, trial, data, etaNames) {
+  .scales <- .nnTrialScales(trial)
+  .ok <- if (is.null(.scales)) character(0) else {
+    names(.scales)[is.finite(.scales) & .scales > 0]
+  }
+  .summarize <- function(v) {
+    v <- as.numeric(v)
+    v <- v[is.finite(v)]
+    if (length(v) < 2L) return(NULL)
+    .q <- unname(stats::quantile(v, c(0.1, 0.9), na.rm = TRUE))
+    list(center = stats::median(v),
+         range = if (all(is.finite(.q)) && .q[2L] > .q[1L]) .q else NULL)
+  }
+  lapply(inputs, function(.in) {
+    .src <- .nnInputSource(.in, .ok, names(data), etaNames)
+    .out <- list(name = trimws(.in), kind = .src$kind, scale = 1,
+                 center = 0, range = NULL)
+    if (identical(.src$kind, "eta") || identical(.src$kind, "expr")) return(.out)
+    .v <- if (identical(.src$kind, "trial")) trial[[.src$col]] else data[[.src$col]]
+    .s <- .nnTypicalScale(.v)
+    .out$scale <- if (is.finite(.s) && .s > 0) .s else 1
+    .sum <- .summarize(.v)
+    if (!is.null(.sum)) {
+      .out$center <- .sum$center
+      .out$range <- .sum$range
+    }
+    .out
+  })
 }
 
 ## Divide a network's first-layer weights by the per-input scales.
@@ -99,14 +172,15 @@
   w
 }
 
-## Per-network input scales for a whole model, given the fitting data.
-## `nets` is the augmented-model network metadata (id/K/H/weights + inputs).
-.nnInputScales <- function(ui, data, nets, inputsById) {
-  .trial <- .nnTrialScales(ui, data)
-  .etas <- tryCatch(ui$eta, error = function(e) character(0))
+## Per-network input scales for a whole model, given the fitting data and the
+## trial solve.  `nets` is the augmented-model network metadata, which carries
+## each network's input expressions (R/nnAugmentUi.R); `trial` is the frame from
+## .nnTrialSolve(), or NULL when it failed, in which case the scales come from
+## the data columns alone.
+.nnInputScales <- function(trial, data, nets, etaNames) {
+  .scales <- .nnTrialScales(trial)
   lapply(nets, function(.n) {
-    .in <- inputsById[[as.character(.n$id)]]
-    if (is.null(.in)) return(rep(1, .n$K))
-    .nnScalesForNet(.in, .trial, data, .etas)
+    if (is.null(.n$inputs)) return(rep(1, .n$K))
+    .nnScalesForNet(.n$inputs, .scales, data, etaNames)
   })
 }

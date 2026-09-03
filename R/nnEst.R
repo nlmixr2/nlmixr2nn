@@ -168,42 +168,35 @@
   ## silently corrupt a refit's warm start.
   .untrained <- !isTRUE(tryCatch(get("nnTrained", envir = .ui, inherits = FALSE),
                                  error = function(e) FALSE))
-  if (.untrained) {
-    .inputsById <- tryCatch({
-      .cl <- .nnParseCallAll(.ui$lstChr)
-      stats::setNames(lapply(.cl, function(.c) .c$inputs),
-                      vapply(.cl, function(.c) as.character(.c$id), character(1)))
-    }, error = function(e) NULL)
-    if (!is.null(.inputsById)) {
-      ## Bind the registry to the BASE model and push the current weights before
-      ## the trial solve.
-      ##
-      ## Filling the data columns is not enough on its own: the loader also
-      ## injects from its own buffer, and inside the loop `.nnEnv$training` is
-      ## TRUE, so the ui-prep hook does not rebind.  Without this the trial solve
-      ## ran against whatever the previous fit left in the buffer -- zeros in a
-      ## fresh session -- so the state trajectory, and therefore the derived
-      ## scale, differed from run to run.  That made whole fits irreproducible
-      ## under a fixed set.seed().
-      for (.net in .aug$nets) {
-        nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
-        nnSetWeights(.net$id, nnTorchWeights(.net$id))
-      }
-      .scales <- tryCatch(
-        .nnInputScales(.ui, .nnFillWeightCols(.aug, .data), .aug$nets, .inputsById),
-        error = function(e) NULL)
-      if (!is.null(.scales)) {
-        for (.i in seq_along(.aug$nets)) {
-          .net <- .aug$nets[[.i]]
-          .sc <- .scales[[.i]]
-          if (any(is.finite(.sc) & .sc != 1)) {
-            nnTorchSetWeights(.net$id,
-                              .nnRescaleW1(nnTorchWeights(.net$id), .net$K, .net$H, .sc))
-            .nnEnv$scales[[as.character(.net$id)]] <- .sc
-          }
-        }
-      }
+  .adata <- .nnFillWeightCols(.aug, .data)
+  ## Every eta under BOTH spellings.  The augmented model renames `eta.nn` to
+  ## `eta_nn` (R/nnAugmentUi.R) and the net metadata carries the sanitized form,
+  ## while `ui$eta` carries the dotted one; matching against only one of them
+  ## silently fails to recognize an eta, which then falls through to the data
+  ## lookup, misses, and yields a scale of 1 -- the right answer by accident, so
+  ## the bug would not show until a data column happened to be called `eta_nn`.
+  .etaAll <- unique(c(tryCatch(.ui$eta, error = function(e) character(0)),
+                      unname(.aug$covMap)))
+
+  ## ONE trial solve of the model at its initial estimates, serving two callers:
+  ## input scaling below, and the curvature penalty's grid (R/nnPenalty.R).  It
+  ## also supplies the per-input magnitudes the L2 term needs, which is why it is
+  ## taken on a refit too even though the scaling is not re-applied there --
+  ## without it a state input's L2 multiplier would silently fall back to 1 and
+  ## that weight column would go all but unpenalized on the second fit.
+  ##
+  ## Binding the registry and pushing the current weights first is not optional:
+  ## the loader injects from its own buffer and `.nnEnv$training` is TRUE inside
+  ## the loop, so without this the trial solve runs against whatever the previous
+  ## fit left behind -- zeros in a fresh session -- and the derived scale, and
+  ## therefore the whole fit, stops being reproducible under a fixed set.seed().
+  .trial <- NULL
+  if (.untrained || isTRUE(sched$l2 > 0) || isTRUE(sched$smooth > 0)) {
+    for (.net in .aug$nets) {
+      nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+      nnSetWeights(.net$id, nnTorchWeights(.net$id))
     }
+    .trial <- tryCatch(.nnTrialSolve(.ui, .adata), error = function(e) NULL)
     ## The trial solve went through rxSolve.rxUi, which clears the active
     ## par-loader on exit.  Leaving it cleared silently disarms weight injection
     ## for every remaining solve in the fit -- the objective then never moves.
@@ -211,8 +204,48 @@
     .nnLoaderOn()
   }
 
+  ## INPUT SCALING (R/nnScale.R).  A network fed raw model quantities -- amounts
+  ## in the hundreds, concentrations in the hundredths -- starts saturated, and a
+  ## saturated network has no input derivative: no FOCEi sensitivity for a latent
+  ## eta, and no weight-training signal.  Rescale the first-layer weights by each
+  ## input's typical magnitude, measured from the trial solve above.
+  ##
+  ## Only for a model that has never been trained.  Trained weights already
+  ## embody whatever scaling the previous fit found, so rescaling them would
+  ## silently corrupt a refit's warm start.
+  if (.untrained) {
+    .scales <- tryCatch(.nnInputScales(.trial, .adata, .aug$nets, .etaAll),
+                        error = function(e) NULL)
+    if (!is.null(.scales)) {
+      for (.i in seq_along(.aug$nets)) {
+        .net <- .aug$nets[[.i]]
+        .sc <- .scales[[.i]]
+        if (any(is.finite(.sc) & .sc != 1)) {
+          nnTorchSetWeights(.net$id,
+                            .nnRescaleW1(nnTorchWeights(.net$id), .net$K, .net$H, .sc))
+          .nnEnv$scales[[as.character(.net$id)]] <- .sc
+        }
+      }
+    }
+  }
+
+  ## The weight penalty (R/nnPenalty.R).  Built once, outside the untrained gate,
+  ## so a refit is regularizable too.  NULL when both lambdas are 0, which is the
+  ## strict no-op: nnControl(l2 = 0, smooth = 0) reproduces an unregularized fit.
+  ## The grid's ranges come from the pre-rescale trajectory, which is fine -- it
+  ## is a region to measure curvature over, not a likelihood.
+  .profiles <- tryCatch(lapply(.aug$nets, function(.n) {
+    if (is.null(.n$inputs)) return(NULL)
+    .nnInputProfile(.n$inputs, .trial, .adata, .etaAll)
+  }), error = function(e) NULL)
+  .pen <- .nnPenSpec(.aug, .profiles, sched$l2, sched$smooth)
+
   .wPlaceholder <- stats::setNames(rep(0, .aug$nW), .aug$weights)
-  .weightStep <- .nnWeightStepper(.aug, .data, .idCol, .timeCol, .obs, .dv, .wPlaceholder)
+  ## `pen` rides on the FACTORY, not the returned closure, so it is captured once
+  ## and every caller of the step -- the round loop and the naive-pooled warm-up
+  ## alike -- is penalized without having to remember to pass it.
+  .weightStep <- .nnWeightStepper(.aug, .data, .idCol, .timeCol, .obs, .dv,
+                                  .wPlaceholder, pen = .pen)
   ## eta-free (population UDE) models have no latent input to the network; the
   ## weight step then solves at the pooled population (no per-subject EBEs).
   .hasEta <- length(.aug$covMap) > 0L
@@ -269,7 +302,7 @@
        exact = .exact, exactSelf = .exactSelf, exactPosthoc = .exactPosthoc,
        capDims = .capDims, capStride = .capStride, obsKey = .obsKey,
        knob = .knob, interleave = .interleave,
-       th0 = .th0, errPar0 = .errPar0, sched = sched)
+       th0 = .th0, errPar0 = .errPar0, sched = sched, pen = .pen)
 }
 
 ## QSP / no between-subject variability: an nlm-family estimator is a pure
@@ -306,7 +339,7 @@
   .exactCtx <- NULL
   .wFit <- .nnPopWarmStart(.aug, .data, .idCol, .timeCol, .obs, .dv, .wPlaceholder,
                            .th0, .errPar0, .nnAllTorchWeights(.aug), .innerEst,
-                           sched$rounds, exactCtx = .exactCtx)
+                           sched$rounds, exactCtx = .exactCtx, pen = ctx$pen)
   .nnSetAllTorchWeights(.aug, .wFit)
   .dw <- .nnFillWeightCols(.aug, .data)
   if (!is.null(.nlmBases)) {
@@ -345,7 +378,11 @@
   }
   .fit <- .nnAddTablesCov(.fit, .wFit, .baseBases, .aug, .matEst, ctx$origTablesCov)
   .nnStoreNnFit(ctx, .fit, .wFit,
+                ## same columns as the round loop's parHist (R/nnEst.R): both
+                ## branches fill the one `nnParHist` slot, so a column added to
+                ## one and not the other ships two schemas under one name
                 data.frame(round = 1L, objf = .fit$objf,
+                  pen = .nnPenalty(ctx$pen, .wFit)$value,
                   errAdd = if (is.na(.aug$errAdd)) NA_real_ else .fit$theta[[.aug$errAdd]],
                   errProp = if (is.na(.aug$errProp)) NA_real_ else .fit$theta[[.aug$errProp]],
                   rmse = NA_real_, wChange = NA_real_, objfChange = NA_real_),
@@ -366,7 +403,7 @@
   if (!identical(sched$warmStart, "none") && is.null(.existing)) {
     .wPop <- .nnPopWarmStart(.aug, .data, .idCol, .timeCol, .obs, .dv, .wPlaceholder,
                              .th0, .errPar0, .nnAllTorchWeights(.aug),
-                             sched$warmStart, sched$warmPopIters)
+                             sched$warmStart, sched$warmPopIters, pen = ctx$pen)
     .nnSetAllTorchWeights(.aug, .wPop)
     message(sprintf("nn: population (nlm-bridge, %s) warm start applied", sched$warmStart))
   }
@@ -479,15 +516,25 @@
     .thetas <- .fit$theta
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
                     prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
+    ## The penalty AT THE WEIGHTS THE INNER FIT JUST SAW -- before any weight step
+    ## moves them.  Taking it from the step's return instead would report the
+    ## value at weights up to `wSteps` updates later than the objf beside it, and
+    ## `objf + pen` would then not be a penalized objective at any single point.
+    .pen <- .nnPenalty(ctx$pen, .nnAllTorchWeights(.aug))$value
     for (.ws in seq_len(sched$wSteps)) {
       .rmse <- .weightStep(.ebes, .errPar, .thetas, .dLLdfObs)$rmse
     }
     .wNow <- .nnAllTorchWeights(.aug)
     .wChange <- sqrt(sum((.wNow - .wPrev)^2)) / (sqrt(sum(.wPrev^2)) + 1e-8)
     .wPrev <- .wNow
-    .objfChange <- if (is.na(.objfPrev)) Inf else abs(.fit$objf - .objfPrev) / (abs(.objfPrev) + 1e-8)
-    .objfPrev <- .fit$objf
-    .parHist[[.round]] <- data.frame(round = .round, objf = .fit$objf,
+    ## Convergence is judged on what the weight step actually descends -- the
+    ## PENALIZED objective -- while `objf` stays the unpenalized -2LL that gets
+    ## reported and that AIC/BIC are formed from.  With the penalty off, `pen` is
+    ## exactly 0 and this is bit-identical to comparing objf alone.
+    .objfPen <- .fit$objf + .pen
+    .objfChange <- if (is.na(.objfPrev)) Inf else abs(.objfPen - .objfPrev) / (abs(.objfPrev) + 1e-8)
+    .objfPrev <- .objfPen
+    .parHist[[.round]] <- data.frame(round = .round, objf = .fit$objf, pen = .pen,
                                      errAdd = .errPar$add, errProp = .errPar$prop,
                                      rmse = .rmse, wChange = .wChange, objfChange = .objfChange)
     ## stop when the weights (and, when interleaving, the objective) stabilise;

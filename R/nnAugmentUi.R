@@ -179,9 +179,19 @@
   ## per-network metadata carrying the global-weight offset + the network's weight
   ## base in the augmented base model (each net's block is contiguous there).
   .off <- 0L
+  ## `.calls` is already parsed above for the direct term; carrying each net's
+  ## input expressions here means nothing downstream has to re-parse the model
+  ## text to learn them (input scaling and the curvature penalty both need them).
+  ## NOTE the spelling: these come from `.augBase`, where every eta has been
+  ## renamed through `.covMap` (eta.nn -> eta_nn), so anything matching them
+  ## against `ui$eta` must match against BOTH spellings.
+  .inputsOf <- stats::setNames(
+    lapply(.calls, function(.c) .c$inputs),
+    vapply(.calls, function(.c) as.character(.c$id), character(1)))
   .netMeta <- lapply(.nets, function(m) {
     .nWm <- as.integer(m$H * m$K + 2L * m$H + 1L)
     .meta <- list(id = m$id, K = m$K, H = m$H, act = m$act, weights = m$weights, nW = .nWm,
+                  inputs = .inputsOf[[as.character(m$id)]],
                   offset = .off, gIdx = .off + seq_len(.nWm),   # 1-based global indices
                   augBase = .nnWeightBase(.mAugBase, m$id, m$K, m$H),
                   predswCols = sprintf("rx_predsw_%d_", .off + seq_len(.nWm) - 1L))

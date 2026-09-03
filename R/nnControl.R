@@ -55,6 +55,33 @@
 #'   poorly conditioned region -- so raise it only when you want a stronger
 #'   fixed-effects starting point (e.g. a population/UDE model with no random
 #'   effect).
+#' @param l2 weight-decay strength.  Adds `l2 * sum(Weff^2)` over the weight
+#'   MATRICES to the objective the weight step minimizes; biases stay free, so the
+#'   network can still move its output level without paying for it.  `Weff` is the
+#'   effective weight -- the first layer is penalized on `scale * W1`, because
+#'   input scaling is folded into `W1` (see `nnScale.R`) and raw `W1` therefore
+#'   means something different for a covariate of magnitude 500 than for one of
+#'   magnitude 1.  A light penalty is applied by DEFAULT: an unregularized network
+#'   invents covariate-driven variation, and it does so silently.  `0` turns it
+#'   off exactly.
+#'
+#'   The default is deliberately conservative -- set where it cannot hurt any
+#'   supported estimator/endpoint combination rather than where it does the most
+#'   good.  On a model that is visibly overfitting, `l2 = 1` is the value that
+#'   shrinks meaningfully (measured: weight norm down ~20% with the objective
+#'   improving), and is the knob to reach for first.
+#' @param smooth curvature (smoothness) penalty.  Adds `smooth * sum(C^2)` where
+#'   `C = f(x+h) - 2*f(x) + f(x-h)` is the second difference of the network along
+#'   each input's marginal curve, that input swept over its observed range with
+#'   the others held at their center.  Penalizing the SECOND derivative rather
+#'   than the first leaves monotone slopes free and charges only for the wiggles.
+#'   Inputs whose range is not knowable -- an eta, or a compound expression such
+#'   as `nn(central/Vc)` -- are held fixed rather than swept.  Applied by default;
+#'   `0` turns it off exactly.
+#'
+#'   Both penalties shape the OPTIMIZATION only.  The reported `objf` (and hence
+#'   AIC/BIC) stays the unpenalized -2 log-likelihood, so a regularized network
+#'   model remains directly comparable to an analytic-covariate one.
 #' @param optimizer torch optimizer, `"adam"` or `"sgd"`.
 #' @param cotangent source of the endpoint score `dLL/df` used to form the weight
 #'   gradient.  `"gaussian"` is the closed-form additive/proportional Gaussian
@@ -76,7 +103,7 @@
 nnControl <- function(mode = NULL, rounds = NULL, tol = NULL, wSteps = NULL,
                       outerPerRound = NULL, lr = NULL, warmSteps = NULL,
                       warmStart = NULL, warmPopIters = NULL, cotangent = NULL,
-                      optimizer = NULL, seed = NULL) {
+                      optimizer = NULL, seed = NULL, l2 = NULL, smooth = NULL) {
   ## Every argument defaults to NULL, meaning "infer it" (R/nnSchedule.R).  What
   ## matters is not the value but WHICH arguments the caller named: an explicit
   ## `mode = "joint"` must be distinguishable from the inferred one, so that the
@@ -126,7 +153,8 @@ nnControl <- function(mode = NULL, rounds = NULL, tol = NULL, wSteps = NULL,
                  warmStart = warmStart,
                  warmPopIters = .int(warmPopIters, "warmPopIters", 1L),
                  cotangent = cotangent, optimizer = optimizer,
-                 seed = .int(seed, "seed")),
+                 seed = .int(seed, "seed"),
+                 l2 = .num(l2, "l2", 0), smooth = .num(smooth, "smooth", 0)),
             supplied = .supplied, class = "nnControl")
 }
 

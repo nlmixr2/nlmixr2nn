@@ -95,7 +95,7 @@
 }
 
 .nnPopWarmStart <- function(aug, data, idCol, timeCol, obs, dv, wPlaceholder, thetas,
-                            errPar, w0, est, iters, exactCtx = NULL) {
+                            errPar, w0, est, iters, exactCtx = NULL, pen = NULL) {
   .ad <- data
   for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- 0    # population: eta = 0
   if (errPar$add == 0 && errPar$prop == 0) errPar$add <- 1      # avoid R(f)=0
@@ -124,9 +124,18 @@
       .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
       .obj <- sum(log(2 * pi * .R) + .resid^2 / .R)
     }
-    list(obj = .obj,
+    ## The weight penalty (R/nnPenalty.R) enters BOTH the objective and the
+    ## gradient here, and the objective half is not optional: .nnPopOptimize()
+    ## dispatches to bobyqa/newuoa/uobyqa, which never call the gradient at all.
+    ## Penalizing only the gradient would leave a derivative-free warm start
+    ## silently optimizing a different function than a gradient-based one.
+    ##
+    ## This objective is already -2LL, the scale R/nnPenalty.R is defined on, so
+    ## the penalty is added outright -- .nnAddPen(g, w, pen, 2L) by another name.
+    .pn <- .nnPenalty(pen, w)
+    list(obj = .obj + .pn$value,
          grad = -2 * vapply(aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]),
-                            numeric(1), USE.NAMES = FALSE))
+                            numeric(1), USE.NAMES = FALSE) + .pn$grad)
   }
   ## cache the last evaluation so paired objective/gradient calls solve once
   .cache <- new.env(parent = emptyenv())

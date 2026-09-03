@@ -251,6 +251,48 @@ A short list, each of which cost real time:
 - **A tryCatch around an unexported call.** `nlmixr2est::nlmSolveR` does not
   exist (it is internal); the error was swallowed by a `tryCatch` returning `NA`,
   so an entire code path silently never ran.
+- **The two weight-gradient sites are on different objective scales.**
+  `R/nnWeightStep.R` hands torch a gradient of $-\log L$; `R/nnPopFit.R`
+  optimizes $-2\log L$. The weight penalty (below) is defined on the
+  $-2\log L$ scale, so adding the same vector at both would make one `l2` mean
+  two different things inside a single fit, with nothing in the output to say so.
+  `.nnAddPen(g, w, pen, scale)` takes the scale explicitly and
+  `test-nn-penalty.R` asserts the invariant
+  `2 * .nnAddPen(g, w, pen, 1L) == .nnAddPen(2 * g, w, pen, 2L)`.
+- **Plain `sum(W1^2)` is not L2 here.** Input scaling is folded into the
+  first-layer weights and then discarded (`.nnRescaleW1`), so an input of typical
+  magnitude 500 carries a `W1` column ~500x smaller at equal functional effect.
+  A naive weight-decay term would penalize it 250000x less. The penalty is on the
+  *effective* weight `s_k * W1[j,k]`, which is why the spec carries the input
+  scales.
+- **`nnWeightGrad` outside a solve returns zeros, not an error.** It reads the
+  live solve's `par_ptr`. Anything evaluating a network outside a solve — the
+  curvature penalty, `nnEval()` — must use the explicit-weight entry points
+  `_nlmixr2nn_nnForwardW` / `_nlmixr2nn_nnWeightGradW`. Using the registry form
+  would make the whole penalty vanish silently.
+
+## The weight penalty
+
+`R/nnPenalty.R`. Two terms, both optional, both on by default:
+
+$$P = -2\log L + \lambda_{2}\sum W_{\text{eff}}^2 + \lambda_{s}\sum C^2$$
+
+`C` is the second difference of the network along one input's marginal curve,
+that input swept over its observed 10th-90th percentile with the others pinned at
+their center. Sweeping each input's *own* range is what makes `smooth` scale-free
+without extra normalization: $C = h^2 f''(x)$ and $h$ is proportional to the
+input's spread, so `C` is curvature with respect to the standardized input.
+
+Inputs with no resolvable range — a latent eta, whose EBEs move every round, or a
+compound expression such as `nn(centr/Vc)` — are held fixed rather than swept.
+
+The gradient reuses the analytic weight Jacobian:
+$\partial C/\partial w = J(x_{i+1}) - 2J(x_i) + J(x_{i-1})$, so there is no new
+autodiff and no new C code.
+
+`nnControl(l2 = 0, smooth = 0)` is a strict no-op: the spec is `NULL`, the
+gradient vector is returned untouched, and the fit is bit-identical to an
+unregularized one.
 
 ## Extending
 

@@ -16,7 +16,9 @@ nnControl(
   warmPopIters = NULL,
   cotangent = NULL,
   optimizer = NULL,
-  seed = NULL
+  seed = NULL,
+  l2 = NULL,
+  smooth = NULL
 )
 }
 \arguments{
@@ -59,17 +61,52 @@ poorly conditioned region -- so raise it only when you want a stronger
 fixed-effects starting point (e.g. a population/UDE model with no random
 effect).}
 
-\item{cotangent}{source of the error-model score `dLL/df` used to form the weight
-gradient: `"gaussian"` (default) uses the closed-form additive/proportional
-Gaussian cotangent; `"exact"` uses the per-observation cotangent captured from
-the inner fit's likelihood contribution hook, which is correct for ANY residual
-model (e.g. lognormal, transform-both-sides) -- best paired with `wSteps = 1`
-(the captured cotangent is at the round's weights).}
+\item{cotangent}{source of the endpoint score `dLL/df` used to form the weight
+gradient.  `"gaussian"` is the closed-form additive/proportional Gaussian
+cotangent.  `"dist"` is the endpoint distribution's own derivative, for a
+count endpoint such as `pois()` or `binom()`, where `f` is the distribution's
+parameter rather than a prediction.  `"exact"` is the per-observation
+cotangent captured from the inner fit's likelihood contribution hook, which
+is correct for any NORMAL residual model including transform-both-sides
+(lognormal, Box-Cox, logit) -- best paired with `wSteps = 1`, since the
+captured cotangent is at the round's starting weights.  `"exact"` does NOT
+apply to a count endpoint: there the hook reports `dLL/df = 1`, because `f`
+is the log-density itself.  Left unset, the source is chosen from the
+endpoint, which is what you want.}
 
 \item{optimizer}{torch optimizer, `"adam"` or `"sgd"`.}
 
 \item{seed}{optional integer seed for torch weight initialization (ignored when
 the model already carries trained weights, which are used as the start).}
+
+\item{l2}{weight-decay strength.  Adds `l2 * sum(Weff^2)` over the weight
+  MATRICES to the objective the weight step minimizes; biases stay free, so the
+  network can still move its output level without paying for it.  `Weff` is the
+  effective weight -- the first layer is penalized on `scale * W1`, because
+  input scaling is folded into `W1` (see `nnScale.R`) and raw `W1` therefore
+  means something different for a covariate of magnitude 500 than for one of
+  magnitude 1.  A light penalty is applied by DEFAULT: an unregularized network
+  invents covariate-driven variation, and it does so silently.  `0` turns it
+  off exactly.
+
+  The default is deliberately conservative -- set where it cannot hurt any
+  supported estimator/endpoint combination rather than where it does the most
+  good.  On a model that is visibly overfitting, `l2 = 1` is the value that
+  shrinks meaningfully (measured: weight norm down ~20% with the objective
+  improving), and is the knob to reach for first.}
+
+\item{smooth}{curvature (smoothness) penalty.  Adds `smooth * sum(C^2)` where
+  `C = f(x+h) - 2*f(x) + f(x-h)` is the second difference of the network along
+  each input's marginal curve, that input swept over its observed range with
+  the others held at their center.  Penalizing the SECOND derivative rather
+  than the first leaves monotone slopes free and charges only for the wiggles.
+  Inputs whose range is not knowable -- an eta, or a compound expression such
+  as `nn(central/Vc)` -- are held fixed rather than swept.  Applied by default;
+  `0` turns it off exactly.
+
+  Both penalties shape the OPTIMIZATION only.  The reported `objf` (and hence
+  AIC/BIC) stays the unpenalized -2 log-likelihood, so a regularized network
+  model remains directly comparable to an analytic-covariate one.}
 }
 \value{
 an object of class `"nnControl"`.
