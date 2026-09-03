@@ -11,8 +11,11 @@
 
 .nnProgressStart <- function(rounds, quiet) {
   if (isTRUE(quiet) || !interactive()) return(NULL)
-  .ok <- tryCatch({ rxode2::rxProgress(as.integer(rounds)); TRUE },
-                  error = function(e) FALSE)
+  .ok <- tryCatch({
+      rxode2::rxProgress(as.integer(rounds))
+      TRUE
+    },
+    error = function(e) FALSE)
   if (.ok) list(rounds = as.integer(rounds)) else NULL
 }
 
@@ -51,8 +54,21 @@
   }, error = function(e) NULL)
   message(sprintf("nn: %s training %s after %d round%s", .how, .why, nRun,
                   if (nRun == 1L) "" else "s"))
-  message(sprintf("    objective %.4g | weight change %.2g%s", objf, wChange,
-                  if (interleave) sprintf(" | objf change %.2g", objfChange) else ""))
+  ## the penalty share, when there is one -- the reported objective is the
+  ## UNPENALIZED -2LL, so without this the number the loop converged on is
+  ## invisible
+  .pen <- tryCatch({
+    .h <- do.call(rbind, parHist)
+    if (is.null(.h) || !nrow(.h) || is.null(.h$pen)) NULL else .h$pen[nrow(.h)]
+  }, error = function(e) NULL)
+  .penTxt <- if (!is.null(.pen) && is.finite(.pen) && .pen > 0) {
+    sprintf(" (+ %.4g penalty)", .pen)
+  } else {
+    ""
+  }
+  .chgTxt <- if (interleave) sprintf(" | objf change %.2g", objfChange) else ""
+  message(sprintf("    objective %.4g%s | weight change %.2g%s", objf,
+                  .penTxt, wChange, .chgTxt))
   if (!is.null(.rmse) && all(is.finite(.rmse))) {
     message(sprintf("    rmse %.4g -> %.4g", .rmse[1L], .rmse[2L]))
   }

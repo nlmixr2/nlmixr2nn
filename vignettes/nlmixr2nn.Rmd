@@ -40,7 +40,7 @@ mod <- function() {
     Vc <- exp(lVc)
     d/dt(depot)   <- -ka * depot
     ## a 6-unit network of the central amount enters the elimination
-    d/dt(central) <-  ka * depot - nn(central, n_hidden = 6)
+    d/dt(central) <-  ka * depot - nn(central, nHidden = 6)
     cp <- central / Vc
   })
 }
@@ -102,7 +102,7 @@ d <- do.call(rbind, lapply(1:8, function(id) {
 ude <- function() {
   ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
   model({
-    g <- nn(centr, eta.nn, n_hidden = 3, act = "tanh")
+    g <- nn(centr, eta.nn, nHidden = 3, act = "tanh")
     d/dt(centr) <- -(1 / (1 + exp(-g))) * centr     # a bounded learned rate
     centr ~ add(add.sd)
   })
@@ -171,7 +171,7 @@ qd <- do.call(rbind, lapply(1:6, function(id) {
 qsp <- function() {
   ini({ add.sd <- 0.3 })                     # residual error only -- no eta
   model({
-    g <- nn(centr, n_hidden = 3, act = "tanh")
+    g <- nn(centr, nHidden = 3, act = "tanh")
     d/dt(centr) <- -(1 / (1 + exp(-g))) * centr
     centr ~ add(add.sd)
   })
@@ -228,9 +228,51 @@ nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(rounds = 400, lr = 0.01))
 |---|---|---|
 | `mode` | `"joint"` when the estimator resumes from a partial fit, else `"iter"` | you want fully converged inner fits each round |
 | `rounds` | 200 joint, 30 iterative, 60 population | training was still improving when it stopped |
-| `cotangent` | closed form for an untransformed `add()`/`prop()` endpoint, exact otherwise | rarely — asking for the closed form on a transformed endpoint is an error |
+| `cotangent` | the Gaussian closed form for an untransformed `add()`/`prop()` endpoint, the distribution's own score for a count endpoint, the captured exact score otherwise | rarely — a source the endpoint cannot support is an error, not a silent fallback |
 | `lr`, `optimizer` | 0.03 (0.01 on a refit), Adam | the objective oscillates or moves too slowly |
 | `warmStart` | a population pre-fit, skipped when the model already carries trained weights | you want a longer or shorter pre-fit |
+| `l2`, `smooth` | `0` -- no penalty on the weights or on curvature | a fitted network looks wigglier than the data can justify (see below) |
+
+### Regularization, when a network learns too much
+
+A network with more capacity than the data supports will invent structure — a
+covariate curve with sharp wiggles in it, or per-subject variation that should
+have gone to the random effect. It does this silently: the fit converges, the
+objective looks fine, and only the learned shape gives it away.
+
+Two penalties are available for that. `l2` shrinks the weights; `smooth` charges
+for curvature specifically, penalizing the *second* derivative of the network
+along each input, which leaves a monotone slope free and pays only for the
+wiggles. Biases are never penalized, and neither is a latent eta's input column —
+the eta reaches the model only through the network, so shrinking those weights
+would shrink the random effect itself.
+
+Both are a **fraction of the objective**, not an absolute amount: `l2 = 0.05`
+means the weight penalty starts at 5% of the objective, so one value means
+roughly the same thing whatever the endpoint, estimator or data size.
+
+```{r, eval = FALSE}
+fit <- nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(l2 = 0.05))
+plot(nnEval(fit, centr = seq(0, 10, length.out = 101)))
+```
+
+**Both default to `0`.** That is a measured choice, not a cautious one. `l2`
+shrinks the network toward the zero function, and in these models the network
+*is* the model — so any value large enough to suppress structure the data does
+not support is also large enough to attenuate structure it does. On the package's
+own recovery tests, every value from `1e-3` up cost a real covariate effect, and
+every value that preserved them moved the weight norm by less than half a percent.
+
+So reach for it deliberately, when a fitted curve looks wigglier than the data can
+justify. `l2 = 0.05` is where shrinkage becomes substantial — on a test fixture
+with no true covariate effect it took the weight norm from 11.5 to 3.9 while the
+unpenalized objective *improved*. Always look at what the network learned with
+`nnEval()` afterwards rather than trusting the objective alone: real effects
+shrink alongside invented ones.
+
+Both shape the optimization only. The reported `objf` — and so AIC and BIC — stays
+the unpenalized -2 log-likelihood, so a regularized network model is still
+directly comparable to one with an analytic covariate relationship.
 
 ## What is supported
 
@@ -238,10 +280,24 @@ nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(rounds = 400, lr = 0.01))
 - **Activations**: `"softplus"` (default), `"tanh"`, `"relu"`, `"gelu"`, `"silu"`.
   The default is smooth with a nonzero second derivative, which matters because
   the model Jacobian and the FOCEi sensitivities are chained through it.
-- **Hidden layers**: one. `n_hidden` is a single width.
-- **Endpoints**: one, with any normal-distribution residual model — `add()`,
-  `prop()`, both, or a transformation such as `lnorm()`. Count and categorical
-  endpoints are not supported yet.
+- **Hidden layers**: one. `nHidden` is a single width.
+- **Endpoints**: one. Any normal-distribution residual model — `add()`, `prop()`,
+  both, or a transformation such as `lnorm()` — and the count endpoints `pois()`
+  and `binom()`.
+
+  A count endpoint differs in one way worth knowing. For `y ~ pois(lam)` there is
+  no "prediction" to differentiate: the model's prediction *is* the log-density,
+  so the network's effect is chained through the distribution's own parameter
+  (`lam`) instead, and the score is that distribution's derivative. Two
+  consequences: `nnControl(cotangent = "exact")` does not apply and is refused,
+  and **the parameter must be positive by construction** — write
+  `lam <- exp(nn(...))` rather than letting a rate wander negative, which aborts
+  the likelihood evaluation. For `binom(n, p)` the network drives `p`; the size
+  `n` must reach the solve, so bind it to a data column (`n <- ntrials`) rather
+  than writing a bare constant, which the model compiler folds away.
+
+  Other distributions (`nbinom()`, ordinal, and the rest) are refused with a
+  message naming the reason, not fitted wrongly.
 - **Networks per model**: several; they are trained together, and `nnEval(net=)`
   selects between them.
 - **Estimators**: any standard one. `"focei"` and the variational methods

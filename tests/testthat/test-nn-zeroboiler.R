@@ -12,7 +12,7 @@
   model({
     ka <- exp(lka); Vc <- exp(lVc)
     d/dt(depot)   <- -ka * depot
-    d/dt(central) <-  ka * depot - nn(central, n_hidden = 4L)
+    d/dt(central) <-  ka * depot - nn(central, nHidden = 4L)
     cp <- central / Vc
   })
 }
@@ -22,7 +22,7 @@
   model({
     ka <- exp(lka); Vc <- exp(lVc)
     d/dt(depot)   <- -ka * depot
-    d/dt(central) <-  ka * depot - nn(central, n_hidden = 6L, act = "tanh")
+    d/dt(central) <-  ka * depot - nn(central, nHidden = 6L, act = "tanh")
     cp <- central / Vc
   })
 }
@@ -128,7 +128,7 @@ test_that("a fit marks its weights trained, and a refit warm-starts from them", 
   qsp <- function() {
     ini({ add.sd <- 0.3 })
     model({
-      g <- nn(centr, n_hidden = 3L, act = "tanh")
+      g <- nn(centr, nHidden = 3L, act = "tanh")
       d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
       centr ~ add(add.sd)
     })
@@ -157,7 +157,7 @@ test_that("nnEval() reports exactly what the ODE right-hand side evaluates", {
   ## the accessor must not be a reimplementation that can drift from the
   ## compiled activations the solve actually integrates
   m <- function() {
-    model({ y <- nn(u, n_hidden = 5L); d/dt(A) <- -A * 0 })
+    model({ y <- nn(u, nHidden = 5L); d/dt(A) <- -A * 0 })
   }
   set.seed(4)
   ui <- suppressMessages(rxode2::rxode2(m))
@@ -177,9 +177,9 @@ test_that("nnEval() rejects the wrong number of inputs and an unknown network", 
   expect_error(nnEval(), "first argument")
 })
 
-test_that("a vector n_hidden is refused explicitly, not silently mishandled", {
+test_that("a vector nHidden is refused explicitly, not silently mishandled", {
   m <- function() {
-    model({ d/dt(A) <- -nn(A, n_hidden = c(4L, 4L)) })
+    model({ d/dt(A) <- -nn(A, nHidden = c(4L, 4L)) })
   }
   expect_error(suppressMessages(rxode2::rxode2(m)), "single hidden layer")
 })

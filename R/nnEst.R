@@ -1,710 +1,120 @@
-## The nn weight par-loader is registered under the NAME "nlmixr2nn:nnParLoader"
-## (see src/nlmixr2nnPtr.cpp), so rxode2 runs it ONLY while this injector is the
-## active flag -- otherwise it would clobber an unrelated model's par_ptr.  A model
-## carrying nn() is flagged on its ui (nnUpdate() sets rxParLoader()), which the
-## rxSolve.rxUi bridge honors; the estimation engine below also sets the flag
-## directly around its internal solves (inner fits + augmented solves) because they
-## bypass that bridge.  Both no-op gracefully on an older rxode2.
-.nnLoaderName <- "nlmixr2nn:nnParLoader"
-## rxode2's public wrappers rather than .Call()ing its compiled entry points by
-## name: reaching into another package's DLL is not a supported interface and
-## R CMD check flags it.  Both are wrapped because an older rxode2 does not have
-## them, in which case the loader simply never activates -- which is correct, as
-## that rxode2 has no named-loader dispatch either.
-.nnLoaderOn <- function() {
-  tryCatch(rxode2::rxSetActiveParLoader(.nnLoaderName), error = function(e) NULL)
-}
-.nnLoaderOff <- function() {
-  tryCatch(rxode2::rxClearActiveParLoader(), error = function(e) NULL)
-}
-
-## Per-observation error-model cotangent capture (nlmixr2est likelihood-contribution
-## hook).  .nnCapReset(TRUE, nId, kStride) sizes + arms it before an inner fit;
-## .nnCapGet() returns list(id, k, dLLdf) of the fit's converged per-obs
-## cotangents.  No-op on an nlmixr2est without the lik-contrib API.
+## The NN training loop.
 ##
-## The store is sized HERE, from the data, because the hook runs inside
-## nlmixr2est's OpenMP region and must not allocate: it used to grow itself with
-## R_chk_realloc() from a worker thread, which is a data race on the buffer and
-## an R API call off the main thread.
-.nnCapReset <- function(on, nId = 1L, kStride = 1L) {
-  tryCatch(.Call("_nlmixr2nn_capReset", on, as.integer(nId), as.integer(kStride),
-                 PACKAGE = "nlmixr2nn"),
-           error = function(e) NULL)
-}
-.nnCapGet <- function() {
-  tryCatch(.Call("_nlmixr2nn_capGet", PACKAGE = "nlmixr2nn"), error = function(e) NULL)
-}
-
-## Register every network at a given set of per-id bases.  The same three-line
-## loop appeared in half a dozen places, each an opportunity to bind the wrong
-## offset silently.
-.nnSetNetBases <- function(nets, bases) {
-  for (.net in nets) {
-    .b <- bases[[as.character(.net$id)]]
-    if (!is.null(.b) && !is.na(.b)) {
-      nnSetMeta(.net$id, .b, .net$K, .net$H, .net$act)
-    }
-  }
-  invisible()
-}
-
-## Per-network weight-block bases for the model a given estimator solves, or
-## NULL when that model cannot be built.
-.nnEstBases <- function(ui, est, aug) {
-  .p <- .nnEstSolveParams(ui, est)
-  if (is.null(.p)) return(NULL)
-  .b <- tryCatch(nnUpdate(ui, params = .p), error = function(e) NULL)
-  if (is.null(.b) || !nrow(.b)) return(NULL)
-  stats::setNames(.b$base, as.character(.b$id))
-}
-
-## Store dimensions for a dataset: subjects, and the largest number of
-## observations any one of them has.  These are exactly what the hook's
-## (id, k) indices are bounded by.
-.nnCapDims <- function(data, idCol, obs) {
-  .ids <- data[[idCol]][obs]
-  if (length(.ids) == 0L) return(list(nId = 1L, kStride = 1L))
-  list(nId = length(unique(.ids)),
-       kStride = max(as.integer(table(.ids))))
-}
-
-## NN-in-ODE training engine (.nnRun) for the transparent nlmixr2nn workflow.
-## It is driven by nlmixr2nn's estimation interceptor (R/nnInterceptor.R): a model
-## with an nn() term fitted with a standard est (focei/saem/...) is claimed here.
+## `.nnRun` is the entry point the estimation interceptor calls; it owns only the
+## global state (the par-loader flag, the shape registry's training mode, the
+## torch modules) and the order of the phases.  Everything else is a phase
+## function taking the `ctx` list that `.nnRunCtx()` builds:
 ##
-## Two modes (nnControl(mode=)):
-## * "iter" -- block-coordinate solve/update/solve: each round a FULL inner NLME
-##   fit of the BASE model with the weights held fixed, then torch weight steps.
-## * "joint" -- DeepPumas-style interleave: each round a warm-started PARTIAL inner
-##   step (outerPerRound outer iterations) + weight steps, co-descending the
-##   population parameters and the weights (only when the inner estimator exposes
-##   maxOuterIterations; otherwise it degrades to "iter").
+##   .nnRunCtx        the ui, the augmented model, the data columns the gradient
+##                    reads, the per-estimator weight-block bases, the capture
+##                    keys, and the resolved schedule -- everything derived once
+##   .nnRunPopFit     the no-BSV (QSP) branch: an nlm-family est fits the weights
+##                    as a pure population problem and returns
+##   .nnRunWarmStarts the nlm-bridge population pre-fit and the naive-pooled
+##                    torch warm-up, both pure side effects on the modules
+##   .nnRunLoop       the round loop, returning the last inner fit and its history
+##   .nnStoreNnFit    (R/nnFinalize.R) attaches weights + history to the fit
 ##
-## Each round the weight gradient comes from a transient solve of the augmented
-## (forward-sensitivity) model at the inner EBEs: dLL/dw = sum_obs dLL/df *
-## d(rx_pred_)/dw.  The base model never carries sensitivity states; the augmented
-## model is built, solved, and discarded inside the loop.  The loop stops when the
-## between-round weight change (and, for "joint", the objective change) falls below
-## `tol`, or at `rounds`.
-##
-## The returned fit is the last inner base-model nlmixr2FitData with the trained
-## weights attached as rxForcedPars so predict()/simulate() are self-contained.
+## These used to be one 400-line function whose 25 locals were all in scope
+## everywhere, so the only way to know what the loop actually depended on was to
+## read all of it.  The ctx list is that dependency set, written down.
 
-## Parse the single (Gaussian) endpoint from the normalized model lines:
-## `<pred> ~ add(<a>)`, `~ prop(<b>)`, or `~ add(<a>) + prop(<b>)`.  Returns
-## list(state = pred var, add = additive-sd param or NA, prop = proportional-sd
-## param or NA), or NULL when the error model is unsupported / not found.
-.nnErrEndpoint <- function(lines) {
-  .re <- "^\\s*([A-Za-z._][A-Za-z0-9._]*)\\s*~\\s*(.+?)\\s*$"
-  .m <- regmatches(lines, regexec(.re, lines))
-  .hit <- Filter(function(x) length(x) == 3L, .m)
-  if (length(.hit) != 1L) return(NULL)
-  .var <- .hit[[1L]][[2L]]
-  .rhs <- .hit[[1L]][[3L]]
-  .term <- function(fn) {
-    .r <- sprintf("\\b%s\\(\\s*([A-Za-z._][A-Za-z0-9._]*)\\s*\\)", fn)
-    if (!grepl(.r, .rhs)) return(NA_character_)
-    regmatches(.rhs, regexec(.r, .rhs))[[1L]][[2L]]
-  }
-  .add <- .term("add"); .prop <- .term("prop")
-  ## add/prop give the closed-form Gaussian cotangent; any OTHER error model (add
-  ## and prop both NA, e.g. lnorm / transform-both-sides) still yields the endpoint
-  ## state -- its cotangent then comes from the inner fit (cotangent = "exact").
-  list(state = .var, add = .add, prop = .prop)
-}
-
-## d(prediction)/d(state) for each ODE state, so the prediction's forward
-## sensitivity wrt a weight can be chained from the state sensitivities rx_sw:
-## d(pred)/dw = sum_s d(pred)/d(s) * rx_sw_s.  When the prediction IS a state
-## this is the identity (1 for that state); when it is an lhs (e.g. cp = centr/V)
-## the chain is nontrivial.  Returns a character vector of derivative expressions
-## (rxode2 syntax) named by state.
-.nnDpDs <- function(modelText, states, predVar) {
-  if (predVar %in% states) {
-    return(stats::setNames(as.character(as.integer(states == predVar)), states))
-  }
-  .model <- rxode2::rxS(rxode2::rxGetModel(modelText), TRUE, promoteLinSens = FALSE)
-  .p <- get0(predVar, envir = .model, inherits = FALSE)
-  if (is.null(.p)) {
-    stop("nlmixr2nn: cannot resolve the prediction variable '", predVar, "'",
-         call. = FALSE)
-  }
-  vapply(states, function(s) {
-    .dd <- symengine::D(.p, symengine::Symbol(s))   # bind before rxFromSE (NSE)
-    rxode2::rxFromSE(.dd)
-  }, character(1))
-}
-
-## Auto-build the ephemeral augmented model from a base nn() ui: drop the weight
-## dummy-covariate line and the error line, rename the latent eta(s) to
-## covariates, declare param(weights, latent covariates), and hand to
-## nnAugmentModel().  Returns the compiled augmented model + the metadata the
-## weight step needs.
-.nnAugmentFromUi <- function(ui) {
-  .reg <- .nnEnv$reg
-  if (length(.reg) == 0L) {
-    stop("nlmixr2nn: no nn() term found in the model", call. = FALSE)
-  }
-  ## networks ordered by id -> a stable GLOBAL weight layout (net 0's weights, then
-  ## net 1's, ...), matching nnAugmentModel's rx_sw_<state>_<globalj>_ indexing.
-  .nets <- .reg[order(vapply(.reg, function(m) m$id, integer(1)))]
-  .lines <- ui$lstChr
-  .end <- .nnErrEndpoint(.lines)
-  if (is.null(.end)) {
-    stop("nlmixr2nn currently supports a single additive endpoint (var ~ add(sd))",
-         call. = FALSE)
-  }
-  ## drop the weight dummy-covariate declaration(s) and the error line(s)
-  .keep <- .lines[!grepl("^\\s*rx_nnw[0-9]+_\\s*<-", .lines) & !grepl("~", .lines)]
-  ## latent etas among the nn inputs -> covariate names (dots -> underscores)
-  .etas <- ui$eta
-  .covMap <- stats::setNames(gsub("[^A-Za-z0-9_]", "_", .etas), .etas)
-  for (.e in .etas) {
-    .keep <- gsub(paste0("\\b", gsub("\\.", "\\\\.", .e), "\\b"), .covMap[[.e]], .keep)
-  }
-  ## all networks' weights + the model's non-weight covariates (also NN inputs, e.g.
-  ## WT in `nn(WT, eta.nn)`) + the latent-eta covariates, declared so the augmented
-  ## solve reads them from the data.
-  .allW <- unlist(lapply(.nets, function(m) m$weights), use.names = FALSE)
-  .realCovs <- setdiff(ui$allCovs, .allW)
-  .param <- paste0("param(",
-                   paste(c(.allW, .realCovs, unname(.covMap)), collapse = ", "), ")")
-  .augBase <- paste(c(.param, .keep), collapse = "\n")
-  .H <- stats::setNames(vapply(.nets, function(m) as.integer(m$H), integer(1)),
-                        vapply(.nets, function(m) as.character(m$id), character(1)))
-  .augText <- nnAugmentModel(.augBase, H = .H)
-  .totW <- sum(vapply(.nets, function(m) as.integer(m$H * m$K + 2L * m$H + 1L), integer(1)))
-  ## prediction forward sensitivity wrt each GLOBAL weight, chained through the
-  ## states: rx_predsw_<globalj>_ = sum_s d(pred)/d(s) * rx_sw_<s>_<globalj>_.
-  .states <- rxode2::rxStateOde(rxode2::rxS(rxode2::rxGetModel(.augBase), TRUE,
-                                            promoteLinSens = FALSE))
-  .dpds <- .nnDpDs(.augBase, .states, .end$state)
-  ## The prediction can depend on the network TWO ways, and both must be in the
-  ## sensitivity or the gradient is silently wrong:
-  ##
-  ##   through the states   sum_s d(pred)/d(s) * ds/dw      <- the usual route
-  ##   directly             d(pred)/dg * dg/dw              <- e.g. y <- nn(centr)
-  ##
-  ## The direct term is zero for the common model, where the network appears only
-  ## in a d/dt() -- which is why omitting it went unnoticed.  When the network
-  ## feeds the prediction itself, the state route carries NONE of the effect and
-  ## the assembled gradient came out exactly zero, so such a model did not train
-  ## at all and said nothing.
-  .symBase <- rxode2::rxS(rxode2::rxGetModel(.augBase), TRUE, promoteLinSens = FALSE)
-  .calls <- .nnParseCallAll(.augBase)
-  .dpdg <- stats::setNames(
-    vapply(.calls, function(.c) .nnDvarDg(.symBase, .end$state, .c), character(1)),
-    vapply(.calls, function(.c) as.character(.c$id), character(1)))
-  .anyDirect <- any(.dpdg != "0" & nzchar(.dpdg))
-  if (all(.dpds == "0") && !.anyDirect) {
-    stop("nlmixr2nn: the prediction '", .end$state,
-         "' does not depend on any ODE state, nor on the network directly -- ",
-         "nothing for the network to fit", call. = FALSE)
-  }
-  ## The weight layout is built from the REGISTRY (.nets) while the sensitivity
-  ## states are built from the parsed CALLS, so the two must describe the same
-  ## set of networks.  When they disagree the failure is obscure: a registry
-  ## entry with no call leaves .ownerOf short, and indexing a named vector past
-  ## its end raises "subscript out of bounds"; two calls sharing an id make
-  ## nnAugmentModel() emit twice the variational states the layout accounts for,
-  ## and the extra ones are silently dropped from the gradient.
-  ##
-  ## Neither is reachable through nn() -- every nn() gets its own id from
-  ## rxUdfUiNum() -- but hand-written model text can produce both, so say so
-  ## rather than failing obliquely later.
-  .callIds <- vapply(.calls, function(.c) .c$id, integer(1))
-  .netIds <- vapply(.nets, function(.m) as.integer(.m$id), integer(1))
-  if (anyDuplicated(.callIds)) {
-    stop("nlmixr2nn: network id ",
-         paste(unique(.callIds[duplicated(.callIds)]), collapse = ", "),
-         " is called more than once in the model; a network must appear once, ",
-         "because its weight sensitivities are laid out per network, not per call",
-         call. = FALSE)
-  }
-  if (!setequal(.callIds, .netIds)) {
-    stop("nlmixr2nn: the registered networks (", paste(sort(.netIds), collapse = ", "),
-         ") do not match the ones the model calls (", paste(sort(.callIds), collapse = ", "),
-         ")", call. = FALSE)
-  }
-  ## The input dimension has to agree too, and for the same reason: the weight
-  ## layout and the torch module size come from the REGISTRY's K, while the
-  ## variational states and the nnWg<K> arity come from the CALL's K (nn2 -> 2).
-  ## Disagreement desynchronises the layout -- too few registered inputs and the
-  ## compiled nnWg<K> strides past the end of the weight buffer, which is a
-  ## silent over-read rather than an error.
-  for (.c in .calls) {
-    .m <- Filter(function(.x) .x$id == .c$id, .nets)[[1L]]
-    if (as.integer(.m$K) != as.integer(.c$K)) {
-      stop("nlmixr2nn: network ", .c$id, " is registered with ", .m$K,
-           " input(s) but the model calls nn", .c$K, "() with ", .c$K,
-           call. = FALSE)
-    }
-  }
-  ## global weight index -> which network it belongs to, and its local index
-  .ownerOf <- integer(0); .localOf <- integer(0)
-  for (.c in .calls) {
-    .nWc <- as.integer(.hOfNet(.nets, .c$id) * .c$K + 2L * .hOfNet(.nets, .c$id) + 1L)
-    .ownerOf <- c(.ownerOf, rep(.c$id, .nWc))
-    .localOf <- c(.localOf, seq_len(.nWc) - 1L)
-  }
-  .predsw <- vapply(seq_len(.totW) - 1L, function(j) {
-    .terms <- character(0)
-    for (.si in seq_along(.states)) {
-      if (!identical(.dpds[[.si]], "0") && nzchar(.dpds[[.si]])) {
-        .terms <- c(.terms, sprintf("(%s)*rx_sw_%s_%d_", .dpds[[.si]], .states[.si], j))
-      }
-    }
-    ## the direct term, for the network this weight belongs to
-    .id <- .ownerOf[j + 1L]
-    .d <- .dpdg[[as.character(.id)]]
-    if (!is.null(.d) && !identical(.d, "0") && nzchar(.d)) {
-      .cj <- Filter(function(.c) .c$id == .id, .calls)[[1L]]
-      .terms <- c(.terms, sprintf("(%s)*nnWg%d(%d, %d, %s)", .d, .cj$K, .id,
-                                  .localOf[j + 1L], paste(.cj$inputs, collapse = ", ")))
-    }
-    if (length(.terms) == 0L) .terms <- "0"
-    sprintf("rx_predsw_%d_ = %s", j, paste(.terms, collapse = " + "))
-  }, character(1))
-  .augText <- paste(c(.augText, .predsw), collapse = "\n")
-  .mAugBase <- rxode2::rxode2(.augBase)
-  ## per-network metadata carrying the global-weight offset + the network's weight
-  ## base in the augmented base model (each net's block is contiguous there).
-  .off <- 0L
-  .netMeta <- lapply(.nets, function(m) {
-    .nWm <- as.integer(m$H * m$K + 2L * m$H + 1L)
-    .meta <- list(id = m$id, K = m$K, H = m$H, act = m$act, weights = m$weights, nW = .nWm,
-                  offset = .off, gIdx = .off + seq_len(.nWm),   # 1-based global indices
-                  augBase = .nnWeightBase(.mAugBase, m$id, m$K, m$H),
-                  predswCols = sprintf("rx_predsw_%d_", .off + seq_len(.nWm) - 1L))
-    .off <<- .off + .nWm
-    .meta
-  })
-  ## the endpoint's transformation, read from the ui's own predDf rather than
-  ## re-parsed from the model text -- the weight step needs its derivative to
-  ## chain a transformed-scale score onto natural-scale sensitivities
-  .pd <- tryCatch(ui$predDf, error = function(e) NULL)
-  .ep <- if (is.null(.pd) || !nrow(.pd)) {
-    list(transform = "untransformed", lambda = 1, trLow = 0, trHi = 1)
-  } else {
-    list(transform = as.character(.pd$transform[1L]),
-         lambda = .pd$lambda[1L], trLow = .pd$trLow[1L], trHi = .pd$trHi[1L])
-  }
-  list(text = .augText, mAug = rxode2::rxode2(.augText),
-       covMap = .covMap, realCovs = .realCovs, weights = .allW, nW = .totW,
-       endpoint = .end$state, errAdd = .end$add, errProp = .end$prop, ep = .ep,
-       predswCols = sprintf("rx_predsw_%d_", seq_len(.totW) - 1L),
-       nets = .netMeta)
-}
-
-## The intermediate inner fits are throwaway, so their covariance/FIM and output
-## tables are skipped; the user's original settings are stashed and restored when
-## the tables + covariance are added post-hoc to the final fit.
-.nnStashTablesCov <- function(ctl) {
-  list(calcTables = if (!is.null(ctl$calcTables)) ctl$calcTables else NULL,
-       covMethod  = if (!is.null(ctl$covMethod))  ctl$covMethod  else NULL)
-}
-.nnDisableTablesCov <- function(ctl) {
-  if (!is.null(ctl$calcTables)) ctl$calcTables <- FALSE
-  if (!is.null(ctl$covMethod) &&
-        (inherits(ctl, "foceiControl") || inherits(ctl, "saemControl"))) {
-    ctl$covMethod <- ""
-  }
-  ctl
-}
-## Add output tables + covariance to the ALREADY-FITTED object post-hoc, from the
-## user's original control settings -- NO re-fitting.  addTable() computes the
-## residual/table columns; .setCov() computes the covariance at the converged
-## parameters (maxOuterIterations = 0, so no re-estimation).  The trained weights
-## must already be injected (data columns + loader) so both solves use them.
-.nnAddTablesCov <- function(fit, weights, baseBases, aug, innerEst, orig) {
-  for (.net in aug$nets) {                       # each net at its base-model base
-    nnSetMeta(.net$id, baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
-    nnSetWeights(.net$id, weights[.net$gIdx])
-  }
-  if (isTRUE(orig$calcTables)) {
-    fit <- tryCatch(nlmixr2est::addTable(fit), error = function(e) fit)
-  }
-  .cm <- orig$covMethod
-  if (!is.null(.cm) && !identical(.cm, "") && grepl("focei?$|^i?focei?", innerEst)) {
-    ## post-hoc FOCEi covariance is a finite-difference r/s calc at the converged
-    ## estimates; `analytic`/other labels fall back to "r,s".
-    .post <- if (.cm %in% c("r,s", "r", "s")) .cm else "r,s"
-    tryCatch(nlmixr2est:::.setCov(fit, covMethod = .post), error = function(e) NULL)
-  }
-  fit
-}
-
-## Factory for one torch weight step (shared by both nn training modes).  Given
-## the augmented model + weight metadata and the fixed data pieces, returns a
-## closure weightStep(ebes, errPar, thetas) that: sets the latent-eta covariates
-## to the EBEs, solves the augmented model at the fitted thetas, forms the Gaussian
-## cotangent dLL/df for variance R(f)=add^2+(prop*f)^2, assembles
-## dLL/dw = sum_obs dLL/df * rx_predsw, and takes one torch optimizer step.
-## Returns the RMSE.
-.nnWeightStepper <- function(aug, data, idCol, obs, dv, wPlaceholder) {
-  ## weightStep(ebes, errPar, thetas, dLLdfObs = NULL): dLLdfObs, when supplied, is
-  ## the per-observation error-model cotangent captured from the inner fit (the
-  ## EXACT dLL/df for any residual model), aligned to the observation rows; NULL
-  ## uses the closed-form additive/proportional-Gaussian cotangent.
-  function(ebes, errPar, thetas, dLLdfObs = NULL, step = TRUE) {
-    .ad <- data
-    for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- ebes[as.character(.ad[[idCol]])]
-    for (.net in aug$nets) {                            # each net at its augmented base
-      nnSetMeta(.net$id, .net$augBase, .net$K, .net$H, .net$act)
-      nnSetWeights(.net$id, nnTorchWeights(.net$id))
-    }
-    .p <- c(thetas, wPlaceholder)
-    .s <- rxode2::rxSolve(aug$mAug, .ad, params = .p, returnType = "data.frame")
-    if (!all(aug$predswCols %in% names(.s))) {
-      stop("nlmixr2nn: augmented solve is missing the prediction-sensitivity ",
-           "columns (rx_predsw_*)", call. = FALSE)
-    }
-    .ik <- match(paste(data[[idCol]][obs], data$time[obs]), paste(.s$id, .s$time))
-    .f <- .s[[aug$endpoint]][.ik]
-    .resid <- dv[obs] - .f
-    if (!is.null(dLLdfObs)) {
-      ## The captured score is d(LL)/d(TRANSFORMED prediction) -- transform-both-
-      ## sides is applied in rxode2's rx_pred_ statement, so the hook never sees
-      ## the natural scale.  `rx_sw` below are natural-scale sensitivities, so
-      ## the transformation's own derivative has to close the chain; without it
-      ## a lnorm/boxCox/logit endpoint trained on a gradient short by that factor
-      ## at every observation (R/nnEndpoint.R).
-      .dLLdf <- dLLdfObs
-      if (.nnNeedsTransformJac(aug$ep)) {
-        .dLLdf <- .dLLdf * .nnTransformJac(aug$ep, .f)
-      }
-    } else {
-      .R <- errPar$add^2 + (errPar$prop * .f)^2
-      .dRdf <- 2 * errPar$prop^2 * .f
-      .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
-    }
-    ## `step = FALSE` assembles the gradient without moving the weights, which
-    ## is what lets the two cotangent sources be compared AT THE GRADIENT rather
-    ## than by running two whole fits and hoping the difference shows.
-    .grad <- list()
-    for (.net in aug$nets) {                            # per-network gradient + step
-      .dLLdw <- vapply(.net$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]), numeric(1))
-      .grad[[as.character(.net$id)]] <- unname(.dLLdw)
-      if (step) {
-        nnTorchZeroGrad(.net$id)
-        nnTorchSetGrad(.net$id, -.dLLdw)
-        nnTorchStep(.net$id)
-      }
-    }
-    list(rmse = sqrt(mean(.resid^2)), f = .f, dLLdf = .dLLdf, dLLdw = .grad)
-  }
-}
-
-## The nlm family: population-only optimizers (no between-subject variability).
-## Used both as warmStart choices and, when passed as the est of a model with an
-## nn() term, to trigger the no-BSV (QSP) population weight-fit path in .nnRun.
-.nnNlmOptimizers <- c("nlm", "nlminb", "optim", "lbfgsb3c", "n1qn1",
-                      "bobyqa", "newuoa", "uobyqa")
-
-## The nn weight block's base par_ptr index in the nlm-family SOLVE model.  The
-## nlm log-likelihood model declares params(THETA[1..nTheta], DV, allCovs) (see
-## nlmixr2est's rxUiGet.nlmParams), so the weights sit after the thetas and the
-## inserted DV -- a DIFFERENT base than the standard [thetas, covariates] layout
-## nnUpdate() resolves for the base model / FOCEi.  Returns NA if the weights are
-## not in allCovs (then the caller falls back to FOCEi materialization).
-.nnNlmBase <- function(ui, aug) {
-  .nTheta <- length(which(!ui$iniDf$fix))
-  .order <- c(paste0("THETA[", seq_len(.nTheta), "]"), "DV", ui$allCovs)
-  .b <- vapply(aug$nets, function(.n) match(.n$weights[1L], .order) - 1L, integer(1))
-  if (anyNA(.b)) return(NULL)
-  stats::setNames(.b, vapply(aug$nets, function(.n) as.character(.n$id), character(1)))
-}
-
-## Dispatch the population weight fit to any nlm-family optimizer -- nlm is simply
-## an optimizer.  The gradient-based nlminb/nlm/optim(BFGS)/lbfgsb3c/n1qn1 use the
-## analytic sensitivity gradient; the derivative-free minqa family bobyqa/newuoa/
-## uobyqa use only the objective (rhobeg/rhoend set so an at-optimum start is safe).
-## None uses a random effect.  Returns the fitted weight vector (w0 on failure).
-.nnPopOptimize <- function(w0, objf, grf, est, iters) {
-  ## the non-stats optimizers live in Suggests packages; if one is unavailable
-  ## (e.g. the default lbfgsb3c is not installed) fall back to nlminb (always in
-  ## stats) rather than skipping the warm start.
-  .pkg <- c(lbfgsb3c = "lbfgsb3c", n1qn1 = "n1qn1",
-            bobyqa = "minqa", newuoa = "minqa", uobyqa = "minqa")[est]
-  if (!is.na(.pkg) && !requireNamespace(.pkg, quietly = TRUE)) est <- "nlminb"
-  .rho <- list(rhobeg = 0.2, rhoend = 1e-4, maxfun = 50L * iters)
-  .par <- tryCatch(switch(est,
-    nlminb   = stats::nlminb(w0, objf, grf,
-                             control = list(iter.max = iters, eval.max = 3L * iters))$par,
-    nlm      = stats::nlm(function(w) { .r <- objf(w); attr(.r, "gradient") <- grf(w); .r },
-                          w0, iterlim = iters)$estimate,
-    optim    = stats::optim(w0, objf, grf, method = "BFGS",
-                            control = list(maxit = iters))$par,
-    lbfgsb3c = lbfgsb3c::lbfgsb3c(w0, objf, grf, control = list(maxit = iters))$par,
-    n1qn1    = n1qn1::n1qn1(objf, grf, w0, max_iterations = iters)$par,
-    bobyqa   = minqa::bobyqa(w0, objf, control = .rho)$par,
-    newuoa   = minqa::newuoa(w0, objf, control = .rho)$par,
-    uobyqa   = minqa::uobyqa(w0, objf, control = .rho)$par,
-    stop("nlmixr2nn: unknown warmStart optimizer '", est, "'", call. = FALSE)),
-    error = function(e) NULL)
-  if (is.null(.par) || length(.par) != length(w0) || anyNA(.par)) w0 else unname(.par)
-}
-
-## Population (eta=0) weight pre-fit over the weight vector -- the "nlm bridge": a
-## robust fixed-effects fit of the network weights used as the warm start for the
-## mixed-model joint fit.  Weights sit in the optimized vector (as nlm would place
-## them), the eta is fixed at its warm-start location 0 (so any population-only
-## optimizer applies, no random effect), and the population error params come from
-## the model ini.  `est` names the nlm-family optimizer.  The objective is the
-## pooled -2 log-likelihood with the analytic d(-2LL)/dw from the augmented
-## rx_predsw sensitivities.  Returns the fitted weight vector (aug$weights order).
-## One exact-cotangent evaluation for the nlm population weight fit.  Bakes the
-## current weights (w) into the nlm data columns, LOADS + solves the nlm objective
-## once via nlmixr2est's population engine -- which fires the lik-contrib hook, so
-## the EXACT per-obs error-model score d(LL)/d(f) is captured in C++ (any
-## prediction-based error model, censoring included) rather than re-derived from
-## the closed-form Gaussian add/prop formula.  Returns list(obj = -2LL, dLLdf
-## aligned to the observation rows), or NULL to fall back to the Gaussian score.
-## A fresh setup per call is required (and correct): the weights enter the solve
-## as data covariates, so they are baked in at setup time.
-.nnNlmExactCotangent <- function(ctx, aug, adata, w) {
-  for (.net in aug$nets) {
-    nnSetMeta(.net$id, ctx$nlmBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
-    nnSetWeights(.net$id, w[.net$gIdx])
-  }
-  .dw <- .nnFillWeightCols(aug, adata)          # torch weights (= w) -> data columns
-  .parIni <- tryCatch(suppressWarnings(suppressMessages(
-    nlmixr2est::nlmObjectiveSetup(ctx$ui, .dw, ctx$control))), error = function(e) NULL)
-  if (is.null(.parIni)) return(NULL)
-  on.exit(try(nlmixr2est::.nlmFreeEnv(), silent = TRUE), add = TRUE)
-  .nnCapReset(TRUE, ctx$capDims$nId, ctx$capDims$kStride)
-  ## `:::` deliberately: nlmSolveR is internal to nlmixr2est.  It was written as
-  ## `::`, which raises "not an exported object" -- and because that error was
-  ## swallowed by the tryCatch below, this whole exact-cotangent path silently
-  ## fell back to the Gaussian score on every call and never once ran.
-  .obj <- tryCatch(nlmixr2est:::nlmSolveR(.parIni), error = function(e) NA_real_)
-  .cap <- .nnCapGet(); .nnCapReset(FALSE)
-  if (!is.finite(.obj) || is.null(.cap) || !length(.cap$id)) return(NULL)
-  .dLLdf <- .cap$dLLdf[match(ctx$obsKey, .cap$id * ctx$capStride + .cap$k)]
-  if (anyNA(.dLLdf)) return(NULL)
-  list(obj = 2 * .obj, dLLdf = .dLLdf)          # objf = -2LL = 2 * minimum
-}
-
-.nnPopWarmStart <- function(aug, data, idCol, obs, dv, wPlaceholder, thetas, errPar,
-                            w0, est, iters, exactCtx = NULL) {
-  .ad <- data
-  for (.e in names(aug$covMap)) .ad[[aug$covMap[[.e]]]] <- 0    # population: eta = 0
-  if (errPar$add == 0 && errPar$prop == 0) errPar$add <- 1      # avoid R(f)=0
-  .key <- paste(data[[idCol]][obs], data$time[obs])
-  .dvObs <- dv[obs]
-  ## objective (-2 log-likelihood) + analytic gradient at the GLOBAL weight vector w
-  ## (all networks concatenated in aug$nets order)
-  .eval <- function(w) {
-    ## exact per-obs score from the C++ nlm solve when requested (else NULL)
-    .ex <- if (!is.null(exactCtx)) .nnNlmExactCotangent(exactCtx, aug, .ad, w) else NULL
-    for (.net in aug$nets) {                                    # split w per net
-      nnSetMeta(.net$id, .net$augBase, .net$K, .net$H, .net$act)
-      nnSetWeights(.net$id, w[.net$gIdx])
-    }
-    .s <- rxode2::rxSolve(aug$mAug, .ad, params = c(thetas, wPlaceholder),
-                          returnType = "data.frame")
-    .ik <- match(.key, paste(.s$id, .s$time))
-    .f <- .s[[aug$endpoint]][.ik]
-    .resid <- .dvObs - .f
-    .R <- errPar$add^2 + (errPar$prop * .f)^2
-    if (!is.null(.ex)) {                          # exact C++ cotangent + -2LL
-      .dLLdf <- .ex$dLLdf
-      .obj <- .ex$obj
-    } else {                                       # closed-form Gaussian score
-      .dRdf <- 2 * errPar$prop^2 * .f
-      .dLLdf <- .resid / .R + 0.5 * (.resid^2 / .R^2 - 1 / .R) * .dRdf
-      .obj <- sum(log(2 * pi * .R) + .resid^2 / .R)
-    }
-    list(obj = .obj,
-         grad = -2 * vapply(aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]),
-                            numeric(1), USE.NAMES = FALSE))
-  }
-  ## cache the last evaluation so paired objective/gradient calls solve once
-  .cache <- new.env(parent = emptyenv())
-  .get <- function(w) {
-    if (is.null(.cache$w) || !isTRUE(all.equal(w, .cache$w))) {
-      .cache$w <- w; .cache$v <- .eval(w)
-    }
-    .cache$v
-  }
-  .nnPopOptimize(w0, function(w) .get(w)$obj, function(w) .get(w)$grad, est, iters)
-}
-
-## Warm-start weights from a ui that already carries trained weights (as
-## rxForcedPars on the weight covariates -- a previous nn fit, or an nlm
-## population warm-start).  Returns the weight vector (aug$weights order) or NULL.
-.nnExistingWeights <- function(ui, aug) {
-  .fp <- tryCatch(rxode2::rxForcedPars(ui), error = function(e) NULL)
-  if (is.null(.fp)) return(NULL)
-  .w <- .fp[aug$weights]
-  if (length(.w) != aug$nW || anyNA(.w)) return(NULL)
-  unname(.w)
-}
-
-## Read the serialized per-network shape metadata (id/weights/K/H/act) carried on
-## a ui, or NULL.  This is the transient registry (.nnEnv$reg) snapshotted onto
-## the ui at fit time so it survives saveRDS()/reload.
-.nnUiMeta <- function(ui) {
-  .u <- tryCatch(rxode2::rxUiDecompress(ui), error = function(e) ui)
-  if (is.environment(.u) && exists("nnMeta", envir = .u, inherits = FALSE)) {
-    return(get("nnMeta", envir = .u, inherits = FALSE))
-  }
-  NULL
-}
-
-## rxode2 ui-prep hook (registered in .onLoad).  When a saved fit/model carrying
-## nn() is reloaded in a fresh session, the transient shape registry (.nnEnv$reg)
-## is empty, so nnForward() cannot stride the weight block.  Rebuild each of THIS
-## ui's networks' shapes in the C registry -- resolving the block base BY NAME
-## from the current solve-parameter layout (robust to a rebuilt/reordered model).
-## The weight VALUES already arrive via rxForcedPars(); only the shapes are
-## transient.  A no-op during training (the training loop owns the registry and
-## switches bases between the base and augmented models) and for non-nn models.
-## Flag `ui` as owning the nn par-loader, for a model whose weights come from the
-## LOADER BUFFER.  Two things it must not do:
-##  - claim an unrelated model: the loader would write into its par_ptr, which is
-##    exactly what naming the loader prevents;
-##  - claim a persisted fit: rxCallParLoaders writes forcedPars first and then
-##    lets loaders override, so a ui carrying its trained weights in
-##    rxForcedPars() would have them overwritten by whatever the (transient, and
-##    after a reload empty) loader buffer holds.
-## A no-op on an older rxode2 without rxParLoader().
-.nnClaimParLoader <- function(ui) {
-  if (!("rxParLoader<-" %in% getNamespaceExports("rxode2"))) return(invisible(FALSE))
-  .u <- tryCatch(rxode2::rxUiDecompress(ui), error = function(e) NULL)
-  if (!is.environment(.u)) return(invisible(FALSE))   # compressed: cannot set in place
-  if (identical(tryCatch(rxode2::rxParLoader(.u), error = function(e) NULL),
-                .nnLoaderName)) {
-    return(invisible(TRUE))                           # already claimed
-  }
-  .p <- tryCatch(rxode2::rxModelVars(.u)$params, error = function(e) NULL)
-  .w <- grep("^rxnn(W1|B1|W2|B2)_", .p, value = TRUE)
-  if (length(.w) == 0L) return(invisible(FALSE))      # not an nn model
-  .fp <- tryCatch(rxode2::rxForcedPars(.u), error = function(e) NULL)
-  ## Weights riding on the ui normally WIN: a parsed or fitted model describes
-  ## its own network, and letting a transient buffer override it would silently
-  ## zero the network after a reload (the buffer is empty in a fresh session).
-  ## During training that is inverted -- the loop owns the weights and injects
-  ## them through the loader every round, so it must outrank the (by then stale)
-  ## values the ui was parsed with.
-  if (!isTRUE(.nnEnv$training) && any(.w %in% names(.fp))) return(invisible(FALSE))
-  tryCatch({
-    rxode2::rxParLoader(.u) <- .nnLoaderName
-    invisible(TRUE)
-  }, error = function(e) invisible(FALSE))
-}
-
-.nnRehydrate <- function(ui, solveModel = NULL) {
-  ## Claim the par-loader for any model that carries nn weight columns, BEFORE
-  ## the training early-return -- during training the loader buffer is exactly
-  ## where the weights live, so a training-time ui solve needs the flag most.
-  ## This has to happen HERE rather than in nnUpdate(): rxSolve.rxUi calls
-  ## .rxApplyParLoader() right after these hooks, and that CLEARS the active
-  ## loader for a model with no flag -- including a name nnWithLoader() just set.
-  ## Without the flag the weights never reach par_ptr and every nn output
-  ## collapses to its all-zero-weight value.  nnUpdate() cannot do it because a
-  ## ui often arrives compressed, so its in-place set would not reach the caller;
-  ## the ui is decompressed by the time a prep hook sees it.
-  .nnClaimParLoader(ui)
-  if (isTRUE(.nnEnv$training)) return(invisible())
-  .meta <- .nnUiMeta(ui)
-  if (is.null(.meta) || length(.meta) == 0L) return(invisible())
-  ## restore the R-side registry (used by nnCovData / .nnAugmentFromUi / nnUpdate
-  ## / predict) for any of THIS ui's nets missing from the transient registry.
-  .have <- if (length(.nnEnv$reg)) {
-    vapply(.nnEnv$reg, function(m) m$id, integer(1))
-  } else integer(0)
-  for (.m in .meta) {
-    if (!(.m$id %in% .have)) .nnEnv$reg[[as.character(.m$id)]] <- .m
-  }
-  ## Rebuild the C shape registry for THIS model, resolving the weight-block base
-  ## BY NAME against the model actually being solved.  `solveModel` is what the
-  ## gpars layout uses, so it is the authority; the ui is only a fallback for an
-  ## older rxode2 whose prep hooks pass one argument.
-  .params <- tryCatch(
-    if (!is.null(solveModel)) rxode2::rxModelVars(solveModel)$params
-    else .nnSolveParams(ui),
-    error = function(e) NULL)
-  if (is.null(.params)) return(invisible())
-  ## CLEAR-THEN-SET.  The C registry is a flat array keyed by a MODEL-LOCAL id,
-  ## so every single-network model is network 0.  Binding only this model's
-  ## networks -- after clearing -- is what stops two live models from reading
-  ## each other's weights; it is also why nnClearMeta() is no longer something a
-  ## user (or a test) has to call.
-  nnClearMeta()
-  for (.m in .meta) {
-    .idx <- match(.m$weights, .params)
-    if (anyNA(.idx) || any(diff(.idx) != 1L)) next   # not this ui's layout -> skip
-    nnSetMeta(.m$id, .idx[1L] - 1L, .m$K, .m$H, .m$act)
-  }
-  invisible()
-}
-
-## The GLOBAL weight vector = every network's torch weights concatenated in
-## aug$nets order (matching the rx_sw/rx_predsw global index).
-.nnAllTorchWeights <- function(aug) {
-  unlist(lapply(aug$nets, function(.n) nnTorchWeights(.n$id)), use.names = FALSE)
-}
-## Push a GLOBAL weight vector back into each network's torch module (per gIdx).
-.nnSetAllTorchWeights <- function(aug, w) {
-  for (.net in aug$nets) nnTorchSetWeights(.net$id, w[.net$gIdx])
-  invisible()
-}
-## Inject the current torch weights into `data` covariate columns (all networks),
-## for estimators whose kernel reads covariates from the data rather than the
-## par-loader (e.g. SAEM).  Returns the updated data.
-.nnFillWeightCols <- function(aug, data) {
-  for (.net in aug$nets) {
-    .w <- nnTorchWeights(.net$id)
-    for (.j in seq_along(.net$weights)) data[[.net$weights[.j]]] <- .w[.j]
-  }
-  data
-}
-
-## Which control field caps the inner outer iterations -- the knob that makes a
-## partial, warm-startable step for mode="joint"?  Detected by field presence so
-## it is estimator-agnostic: maxOuterIterations (FOCEi family: focei/foce/foi/
-## laplace/agq + the mu*/i* variants) or iters (the variational advi/vae).  Both
-## genuinely RESUME from a ui carrying the previous round's estimates (a gradient
-## optimizer restarts at those estimates; the variational fit re-optimizes from
-## that point), so warm-started partial steps co-descend with the weight steps.
-## Returns NULL for estimators that do NOT resume this way -- saem/fsaem (the
-## stochastic-approximation gain sequence restarts each call, so nEm chunks do not
-## resume the SA chain and interleave is no better than a full fit) and imp/qrpem/
-## nlm-family (no outer-iteration knob) -- which use the block-coordinate iterate
-## loop instead.
-.nnInterleaveKnob <- function(ctl) {
-  if (!is.null(ctl$maxOuterIterations)) return("maxOuterIterations")
-  if (!is.null(ctl$iters))              return("iters")
-  NULL
-}
-
-## Run the NN training loop.  `env` carries ui/data + the standard inner estimator
-## (class(env)[1]) and its control (env$control); `sched` is an nnControl().
-## mode="joint" interleaves warm-started PARTIAL inner steps (outerPerRound outer
-## iterations, via the estimator's outer-step knob) with weight steps -- co-
-## descending parameters and weights -- and falls back to the block-coordinate
-## iterate loop for inner estimators without a partial outer step; mode="iter"
-## runs a full inner fit each round.  The last inner fit is the returned
-## deliverable, with tables/covariance added post-hoc.
+## `env` carries ui/data + the standard inner estimator (class(env)[1]) and its
+## control (env$control); `sched` is an nnControl().  The last inner fit is the
+## returned deliverable, with tables/covariance added post-hoc.
 .nnRun <- function(env, sched) {
+  .nnTorchRequire("fitting a model that contains nn()")
+  ## activate the named nn par-loader for every solve done during training (the
+  ## inner fits + augmented solves bypass the rxSolve.rxUi flag bridge), and put
+  ## the shape registry in training mode: the loop owns it, switching bases
+  ## between the base and augmented models, so the reload rehydrate hook must not
+  ## fire underneath it.
+  ##
+  ## Both are armed HERE, before any setup that can throw, and cleared on exit --
+  ## a failed setup must not leave the loader live for an unrelated model's solve.
+  .nnLoaderOn()
+  .nnEnv$training <- TRUE
+  on.exit({
+    .nnLoaderOff()
+    assign("training", FALSE, envir = .nnEnv)
+  }, add = TRUE)
+
+  ## Clear the compiled shape registry on the way out, whatever happened.
+  ##
+  ## The registry is a flat array keyed by a MODEL-LOCAL id, so every
+  ## single-network model is network 0 -- the entry this fit wrote is exactly the
+  ## entry the NEXT fit's network 0 would read.  On the success path the ui-prep
+  ## hook rebinds per solve and nothing shows.  On a FAILED fit nothing rebinds,
+  ## and the stale shape outlives the model it described: a fit whose network
+  ## took two inputs, followed by one whose network takes one, made nnForward
+  ## stride a two-input block through a one-input parameter vector.  That is not
+  ## a wrong number, it is a segfault -- observed, from an errored fit two cells
+  ## earlier in a smoke sweep, and not reproducible on its own.
+  on.exit(try(nnClearMeta(), silent = TRUE), add = TRUE)
+  ctx <- .nnRunCtx(env, sched)
+  ## registered where the single-frame version registered it: after setup, so a
+  ## throw inside .nnRunCtx leaks the modules exactly as it did before.  Freeing
+  ## them on a failed setup too is a behaviour change, not a move.
+  on.exit(for (.net in ctx$aug$nets) try(nnTorchFree(.net$id), silent = TRUE),
+          add = TRUE)
+
+  if (ctx$innerEst %in% .nnNlmOptimizers) return(.nnRunPopFit(ctx))
+  .nnRunWarmStarts(ctx)
+  .res <- .nnRunLoop(ctx)
+  ## the last inner fit IS the deliverable (no re-fit); add tables + covariance
+  ## post-hoc from the user's original control settings.
+  .fit <- .nnAddTablesCov(.res$fit, .res$weights, ctx$baseBases, ctx$aug,
+                          ctx$innerEst, ctx$origTablesCov)
+  .nnStoreNnFit(ctx, .fit, .res$weights, .res$parHist, .res$converged, .res$nRun)
+}
+
+## Everything the phases below need, derived once.  Also the record of what the
+## loop depends on: a field here is a real dependency, and nothing outside this
+## function may add one.
+.nnRunCtx <- function(env, sched) {
   .ui <- rxode2::rxUiDecompress(env$ui)
   .data <- env$data
   .innerEst <- class(env)[1L]
   ## env$control is already a validated control for .innerEst (nlmixr2() fills it
   ## before dispatch), so it is used directly as the inner NLME control.
   .innerCtl <- env$control
+  ## Checked FIRST, before anything is compiled or allocated: unusable data is
+  ## the cheapest failure to report and the most expensive one to discover in
+  ## round three.  Resolved case-insensitively (R/nnBind.R) -- ID/id, TIME/time,
+  ## DV/dv, EVID/evid are all legal nlmixr2 spellings, and reading the wrong one
+  ## is silent, not an error.  nnCovData() below only ADDS columns, so names
+  ## resolved here stay valid.
+  .idCol <- .nnDataCol(.data, "ID")
+  .timeCol <- .nnDataCol(.data, "TIME")
+  .dvCol <- .nnDataCol(.data, "DV")
+  .evidCol <- .nnDataCol(.data, "EVID")
+  if (anyNA(c(.idCol, .timeCol, .dvCol))) {
+    stop("nlmixr2nn: the fitting data needs ID, TIME and DV columns (any case); ",
+         "missing ",
+         paste(c("ID", "TIME", "DV")[is.na(c(.idCol, .timeCol, .dvCol))],
+               collapse = ", "), call. = FALSE)
+  }
+  .dv <- .data[[.dvCol]]
+  ## An OBSERVATION is EVID 0 *with a DV*.  Rows carrying no DV -- a dropped
+  ## sample, a BLQ record, a placeholder time -- are not observations to anyone:
+  ## nlmixr2est never evaluates them, so its likelihood hook never numbers them,
+  ## and they contribute nothing to a likelihood.
+  ##
+  ## Counting them here did two things, both silent.  The captured cotangent is
+  ## keyed by (subject, observation index), so one missing DV shifted every
+  ## later index and the exact score could not be matched at all.  Worse, the
+  ## closed-form score of a missing DV is NA, and one NA in a sum makes the whole
+  ## weight gradient NA -- torch then wrote NaN into every weight and the fit
+  ## returned, objective and all, saying nothing.  Measured: a single missing DV
+  ## in a 30-row data set took a converging fit (objf 598) to NaN weights.
+  .obs <- if (is.na(.evidCol)) rep(TRUE, nrow(.data)) else .data[[.evidCol]]
+  .obs <- (is.na(.obs) | .obs == 0) & !is.na(.dv)
+  if (!any(.obs)) {
+    stop("nlmixr2nn: the fitting data has no observation rows (EVID 0 with a ",
+         "non-missing DV)", call. = FALSE)
+  }
   .origTablesCov <- .nnStashTablesCov(.innerCtl)
   .innerCtl <- .nnDisableTablesCov(.innerCtl)
-
-  .nnTorchRequire("fitting a model that contains nn()")
-
-  ## activate the named nn par-loader for every solve done during training (the
-  ## inner fits + augmented solves bypass the rxSolve.rxUi flag bridge); cleared on
-  ## exit so it never leaks into an unrelated model's solve.
-  .nnLoaderOn()
-  on.exit(.nnLoaderOff(), add = TRUE)
   ## refit of a reloaded fit (fresh session): the model text already carries
   ## nn<K>() (not nn()), so the UDF will not repopulate the registry -- restore it
   ## from the ui's persisted shapes so augmentation + warm-start-from-stored work.
@@ -712,10 +122,6 @@
     .meta <- .nnUiMeta(.ui)
     if (!is.null(.meta)) for (.m in .meta) .nnEnv$reg[[as.character(.m$id)]] <- .m
   }
-  ## the training loop owns the C shape registry (switching bases between the base
-  ## and augmented models); suppress the reload rehydrate hook while it runs.
-  .nnEnv$training <- TRUE
-  on.exit(assign("training", FALSE, envir = .nnEnv), add = TRUE)
 
   .aug <- .nnAugmentFromUi(.ui)
   .data <- nnCovData(.data)
@@ -762,56 +168,84 @@
   ## silently corrupt a refit's warm start.
   .untrained <- !isTRUE(tryCatch(get("nnTrained", envir = .ui, inherits = FALSE),
                                  error = function(e) FALSE))
-  if (.untrained) {
-    .inputsById <- tryCatch({
-      .cl <- .nnParseCallAll(.ui$lstChr)
-      stats::setNames(lapply(.cl, function(.c) .c$inputs),
-                      vapply(.cl, function(.c) as.character(.c$id), character(1)))
-    }, error = function(e) NULL)
-    if (!is.null(.inputsById)) {
-      ## Bind the registry to the BASE model and push the current weights before
-      ## the trial solve.
-      ##
-      ## Filling the data columns is not enough on its own: the loader also
-      ## injects from its own buffer, and inside the loop `.nnEnv$training` is
-      ## TRUE, so the ui-prep hook does not rebind.  Without this the trial solve
-      ## ran against whatever the previous fit left in the buffer -- zeros in a
-      ## fresh session -- so the state trajectory, and therefore the derived
-      ## scale, differed from run to run.  That made whole fits irreproducible
-      ## under a fixed set.seed().
-      for (.net in .aug$nets) {
-        nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
-        nnSetWeights(.net$id, nnTorchWeights(.net$id))
-      }
-      .scales <- tryCatch(
-        .nnInputScales(.ui, .nnFillWeightCols(.aug, .data), .aug$nets, .inputsById),
-        error = function(e) NULL)
-      if (!is.null(.scales)) {
-        for (.i in seq_along(.aug$nets)) {
-          .net <- .aug$nets[[.i]]
-          .sc <- .scales[[.i]]
-          if (any(is.finite(.sc) & .sc != 1)) {
-            nnTorchSetWeights(.net$id,
-                              .nnRescaleW1(nnTorchWeights(.net$id), .net$K, .net$H, .sc))
-            .nnEnv$scales[[as.character(.net$id)]] <- .sc
-          }
-        }
-      }
+  .adata <- .nnFillWeightCols(.aug, .data)
+  ## Every eta under BOTH spellings.  The augmented model renames `eta.nn` to
+  ## `eta_nn` (R/nnAugmentUi.R) and the net metadata carries the sanitized form,
+  ## while `ui$eta` carries the dotted one; matching against only one of them
+  ## silently fails to recognize an eta, which then falls through to the data
+  ## lookup, misses, and yields a scale of 1 -- the right answer by accident, so
+  ## the bug would not show until a data column happened to be called `eta_nn`.
+  .etaAll <- unique(c(tryCatch(.ui$eta, error = function(e) character(0)),
+                      unname(.aug$covMap)))
+
+  ## ONE trial solve of the model at its initial estimates, serving two callers:
+  ## input scaling below, and the curvature penalty's grid (R/nnPenalty.R).  It
+  ## also supplies the per-input magnitudes the L2 term needs, which is why it is
+  ## taken on a refit too even though the scaling is not re-applied there --
+  ## without it a state input's L2 multiplier would silently fall back to 1 and
+  ## that weight column would go all but unpenalized on the second fit.
+  ##
+  ## Binding the registry and pushing the current weights first is not optional:
+  ## the loader injects from its own buffer and `.nnEnv$training` is TRUE inside
+  ## the loop, so without this the trial solve runs against whatever the previous
+  ## fit left behind -- zeros in a fresh session -- and the derived scale, and
+  ## therefore the whole fit, stops being reproducible under a fixed set.seed().
+  .trial <- NULL
+  if (.untrained || isTRUE(sched$l2 > 0) || isTRUE(sched$smooth > 0)) {
+    for (.net in .aug$nets) {
+      nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+      nnSetWeights(.net$id, nnTorchWeights(.net$id))
     }
+    .trial <- tryCatch(.nnTrialSolve(.ui, .adata), error = function(e) NULL)
     ## The trial solve went through rxSolve.rxUi, which clears the active
     ## par-loader on exit.  Leaving it cleared silently disarms weight injection
     ## for every remaining solve in the fit -- the objective then never moves.
     ## Re-arm unconditionally: the solve clears it whether or not it succeeded.
     .nnLoaderOn()
   }
-  on.exit(for (.net in .aug$nets) tryCatch(nnTorchFree(.net$id), silent = TRUE), add = TRUE)
 
-  .idCol <- if ("ID" %in% names(.data)) "ID" else "id"
-  .obs <- .data[[if ("EVID" %in% names(.data)) "EVID" else "evid"]]
-  .obs <- is.na(.obs) | .obs == 0
-  .dv <- .data[[if ("DV" %in% names(.data)) "DV" else "dv"]]
+  ## INPUT SCALING (R/nnScale.R).  A network fed raw model quantities -- amounts
+  ## in the hundreds, concentrations in the hundredths -- starts saturated, and a
+  ## saturated network has no input derivative: no FOCEi sensitivity for a latent
+  ## eta, and no weight-training signal.  Rescale the first-layer weights by each
+  ## input's typical magnitude, measured from the trial solve above.
+  ##
+  ## Only for a model that has never been trained.  Trained weights already
+  ## embody whatever scaling the previous fit found, so rescaling them would
+  ## silently corrupt a refit's warm start.
+  if (.untrained) {
+    .scales <- tryCatch(.nnInputScales(.trial, .adata, .aug$nets, .etaAll),
+                        error = function(e) NULL)
+    if (!is.null(.scales)) {
+      for (.i in seq_along(.aug$nets)) {
+        .net <- .aug$nets[[.i]]
+        .sc <- .scales[[.i]]
+        if (any(is.finite(.sc) & .sc != 1)) {
+          nnTorchSetWeights(.net$id,
+                            .nnRescaleW1(nnTorchWeights(.net$id), .net$K, .net$H, .sc))
+          .nnEnv$scales[[as.character(.net$id)]] <- .sc
+        }
+      }
+    }
+  }
+
+  ## The weight penalty (R/nnPenalty.R).  Built once, outside the untrained gate,
+  ## so a refit is regularizable too.  NULL when both lambdas are 0, which is the
+  ## strict no-op: nnControl(l2 = 0, smooth = 0) reproduces an unregularized fit.
+  ## The grid's ranges come from the pre-rescale trajectory, which is fine -- it
+  ## is a region to measure curvature over, not a likelihood.
+  .profiles <- tryCatch(lapply(.aug$nets, function(.n) {
+    if (is.null(.n$inputs)) return(NULL)
+    .nnInputProfile(.n$inputs, .trial, .adata, .etaAll)
+  }), error = function(e) NULL)
+  .pen <- .nnPenSpec(.aug, .profiles, sched$l2, sched$smooth)
+
   .wPlaceholder <- stats::setNames(rep(0, .aug$nW), .aug$weights)
-  .weightStep <- .nnWeightStepper(.aug, .data, .idCol, .obs, .dv, .wPlaceholder)
+  ## `pen` rides on the FACTORY, not the returned closure, so it is captured once
+  ## and every caller of the step -- the round loop and the naive-pooled warm-up
+  ## alike -- is penalized without having to remember to pass it.
+  .weightStep <- .nnWeightStepper(.aug, .data, .idCol, .timeCol, .obs, .dv,
+                                  .wPlaceholder, pen = .pen)
   ## eta-free (population UDE) models have no latent input to the network; the
   ## weight step then solves at the pooled population (no per-subject EBEs).
   .hasEta <- length(.aug$covMap) > 0L
@@ -829,8 +263,9 @@
                                             "laplace", "agq", "emvi", "fbvi", "vae"))
   .exactPosthoc <- .exact && !.exactSelf
   ## a non-add()/prop() error model has no closed-form Gaussian cotangent -- its
-  ## score must come from the inner fit.
-  if (is.na(.aug$errAdd) && is.na(.aug$errProp) && !.exact) {
+  ## score comes from the endpoint's distribution (a count endpoint) or from the
+  ## inner fit (anything else).
+  if (is.na(.aug$errAdd) && is.na(.aug$errProp) && !.exact && is.null(.aug$dist)) {
     stop("nlmixr2nn: this error model has no add()/prop() term; ",
          "fit with nnControl(cotangent = \"exact\")", call. = FALSE)
   }
@@ -858,96 +293,134 @@
   .errPar0 <- list(add = if (is.na(.aug$errAdd)) 0 else unname(.th0[.aug$errAdd]),
                    prop = if (is.na(.aug$errProp)) 0 else unname(.th0[.aug$errProp]))
 
-  ## QSP / no between-subject variability: an nlm-family estimator is a pure
-  ## population optimizer -- it rejects random-effects models, and it cannot
-  ## OPTIMIZE the network weights (they are covariates, not in its parameter
-  ## vector).  So the weights are fit directly as a population problem with that
-  ## optimizer over the augmented sensitivity solve (which reads the weights), then
-  ## the fit is materialized at the fixed trained weights with the SAME nlm-family
-  ## estimator -- whose solve now reads the weights natively (nlmixr2est's nlm model
-  ## declares them as covariates), at the nlm-model weight base.  If the nlm base is
-  ## not resolvable, or the model still carries a random effect (which the nlm family
-  ## rejects), materialization falls back to FOCEi.  This is "run an nlm-family
-  ## optimizer without between-subject variability".
-  if (.innerEst %in% .nnNlmOptimizers) {
-    .nlmBases <- if (.hasEta) NULL else .nnNlmBase(.ui, .aug)
-    ## The exact per-observation score for this branch would come from
-    ## nlmixr2est's nlm C++ solve via .nnNlmExactCotangent().  It is DISABLED.
-    ##
-    ## That path never actually ran: it called an unexported `nlmSolveR` through
-    ## `::`, and the resulting error was swallowed by a tryCatch that returned
-    ## NA, so every call fell back to the Gaussian score.  Fixing the call
-    ## revealed why that went unnoticed -- setting the objective up and tearing it
-    ## down once per optimizer evaluation double-frees the shared capture store
-    ## (src/nlmixr2nnContrib.c grows one buffer with realloc), which segfaults.
-    ##
-    ## Turning it on is gated on making that store safe.  Until then this branch
-    ## uses the closed-form Gaussian score, and .nnInferSched() refuses an
-    ## endpoint that has no closed form rather than fitting one wrongly.
-    .exactCtx <- NULL
-    .wFit <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder, .th0, .errPar0,
-                             .nnAllTorchWeights(.aug), .innerEst, sched$rounds,
-                             exactCtx = .exactCtx)
-    .nnSetAllTorchWeights(.aug, .wFit)
-    .trained <- stats::setNames(.wFit, .aug$weights)
-    .dw <- .nnFillWeightCols(.aug, .data)
-    if (!is.null(.nlmBases)) {
-      ## native nlm materialization: the nlm solve reads each network's weights at
-      ## its nlm-model base; nlm estimates the residual error at the fixed weights.
-      for (.net in .aug$nets) {
-        nnSetMeta(.net$id, .nlmBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
-        nnSetWeights(.net$id, .wFit[.net$gIdx])
-      }
-      .matCtl <- .innerCtl
-      if (!is.null(.matCtl$calcTables)) .matCtl$calcTables <- FALSE
-      .fit <- suppressWarnings(suppressMessages(
-        nlmixr2est::nlmixr2(.ui, .dw, est = .innerEst, control = .matCtl)))
-      .matEst <- .innerEst
-      message(sprintf("nn: population (no-BSV) fit via %s (native weight-reading solve)",
-                      .innerEst))
-    } else {
-      ## fallback: nlm base unresolved or a random effect is present -> FOCEi reads
-      ## the weights and estimates the residual error / any Omega.
-      if (.hasEta) {
-        message(sprintf(paste0("est=\"%s\" is population-only; the nn() random effect ",
-                               "is materialized with focei"), .innerEst))
-      }
-      for (.net in .aug$nets) {
-        nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
-        nnSetWeights(.net$id, .wFit[.net$gIdx])
-      }
-      .matCtl <- nlmixr2est::foceiControl(print = 0L, calcTables = FALSE,
-                                          maxInnerIterations = if (.hasEta) 30L else 1L,
-                                          maxOuterIterations = 30L)
-      .fit <- suppressWarnings(suppressMessages(
-        nlmixr2est::nlmixr2(.ui, .dw, est = "focei", control = .matCtl)))
-      .matEst <- "focei"
-      message(sprintf("nn: population (no-BSV) weight fit via %s, materialized with focei",
-                      .innerEst))
-    }
-    .fit <- .nnAddTablesCov(.fit, .wFit, .baseBases, .aug, .matEst, .origTablesCov)
-    .fitEnv <- .fit$env
-    .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
-    rxode2::rxForcedPars(.storedUi) <- .trained
-    .nnMarkTrained(.storedUi, .aug)
-    assign("ui", .storedUi, envir = .fitEnv)
-    assign("nnParHist", data.frame(round = 1L, objf = .fit$objf,
-             errAdd = if (is.na(.aug$errAdd)) NA_real_ else .fit$theta[[.aug$errAdd]],
-             errProp = if (is.na(.aug$errProp)) NA_real_ else .fit$theta[[.aug$errProp]],
-             rmse = NA_real_, wChange = NA_real_, objfChange = NA_real_), envir = .fitEnv)
-    assign("nnWeights", .trained, envir = .fitEnv)
-    assign("nnConverged", TRUE, envir = .fitEnv)
-    assign("nnRounds", 1L, envir = .fitEnv)
-    return(.fit)
-  }
+  list(ui = .ui, data = .data, innerEst = .innerEst, control = .innerCtl,
+       origTablesCov = .origTablesCov, aug = .aug, baseBases = .baseBases,
+       existing = .existing, idCol = .idCol, timeCol = .timeCol,
+       obs = .obs, dv = .dv,
+       wPlaceholder = .wPlaceholder, weightStep = .weightStep,
+       hasEta = .hasEta, latent = .latent,
+       exact = .exact, exactSelf = .exactSelf, exactPosthoc = .exactPosthoc,
+       capDims = .capDims, capStride = .capStride, obsKey = .obsKey,
+       knob = .knob, interleave = .interleave,
+       th0 = .th0, errPar0 = .errPar0, sched = sched, pen = .pen)
+}
 
+## QSP / no between-subject variability: an nlm-family estimator is a pure
+## population optimizer -- it rejects random-effects models, and it cannot
+## OPTIMIZE the network weights (they are covariates, not in its parameter
+## vector).  So the weights are fit directly as a population problem with that
+## optimizer over the augmented sensitivity solve (which reads the weights), then
+## the fit is materialized at the fixed trained weights with the SAME nlm-family
+## estimator -- whose solve now reads the weights natively (nlmixr2est's nlm model
+## declares them as covariates), at the nlm-model weight base.  If the nlm base is
+## not resolvable, or the model still carries a random effect (which the nlm family
+## rejects), materialization falls back to FOCEi.  This is "run an nlm-family
+## optimizer without between-subject variability".
+.nnRunPopFit <- function(ctx) {
+  .ui <- ctx$ui
+  .data <- ctx$data
+  .aug <- ctx$aug
+  .innerEst <- ctx$innerEst
+  .innerCtl <- ctx$control
+  .baseBases <- ctx$baseBases
+  .hasEta <- ctx$hasEta
+  .idCol <- ctx$idCol
+  .timeCol <- ctx$timeCol
+  .obs <- ctx$obs
+  .dv <- ctx$dv
+  .wPlaceholder <- ctx$wPlaceholder
+  .th0 <- ctx$th0
+  .errPar0 <- ctx$errPar0
+  sched <- ctx$sched
+  .nlmBases <- if (.hasEta) NULL else .nnNlmBase(.ui, .aug)
+  ## The exact per-observation score for this branch would come from
+  ## nlmixr2est's nlm C++ solve via .nnNlmExactCotangent().  It is DISABLED.
+  ##
+  ## That path never actually ran: it called an unexported `nlmSolveR` through
+  ## `::`, and the resulting error was swallowed by a tryCatch that returned
+  ## NA, so every call fell back to the Gaussian score.  Fixing the call
+  ## revealed why that went unnoticed -- setting the objective up and tearing it
+  ## down once per optimizer evaluation double-frees the shared capture store
+  ## (src/nlmixr2nnContrib.c grows one buffer with realloc), which segfaults.
+  ##
+  ## Turning it on is gated on making that store safe.  Until then this branch
+  ## uses the closed-form Gaussian score, and .nnInferSched() refuses an
+  ## endpoint that has no closed form rather than fitting one wrongly.
+  .exactCtx <- NULL
+  .wFit <- .nnPopWarmStart(.aug, .data, .idCol, .timeCol, .obs, .dv, .wPlaceholder,
+                           .th0, .errPar0, .nnAllTorchWeights(.aug), .innerEst,
+                           sched$rounds, exactCtx = .exactCtx, pen = ctx$pen)
+  .nnSetAllTorchWeights(.aug, .wFit)
+  .dw <- .nnFillWeightCols(.aug, .data)
+  if (!is.null(.nlmBases)) {
+    ## native nlm materialization: the nlm solve reads each network's weights at
+    ## its nlm-model base; nlm estimates the residual error at the fixed weights.
+    for (.net in .aug$nets) {
+      nnSetMeta(.net$id, .nlmBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+      nnSetWeights(.net$id, .wFit[.net$gIdx])
+    }
+    .matCtl <- .innerCtl
+    if (!is.null(.matCtl$calcTables)) .matCtl$calcTables <- FALSE
+    .fit <- suppressWarnings(suppressMessages(
+      nlmixr2est::nlmixr2(.ui, .dw, est = .innerEst, control = .matCtl)))
+    .matEst <- .innerEst
+    message(sprintf("nn: population (no-BSV) fit via %s (native weight-reading solve)",
+                    .innerEst))
+  } else {
+    ## fallback: nlm base unresolved or a random effect is present -> FOCEi reads
+    ## the weights and estimates the residual error / any Omega.
+    if (.hasEta) {
+      message(sprintf(paste0("est=\"%s\" is population-only; the nn() random effect ",
+                             "is materialized with focei"), .innerEst))
+    }
+    for (.net in .aug$nets) {
+      nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
+      nnSetWeights(.net$id, .wFit[.net$gIdx])
+    }
+    .matCtl <- nlmixr2est::foceiControl(print = 0L, calcTables = FALSE,
+                                        maxInnerIterations = if (.hasEta) 30L else 1L,
+                                        maxOuterIterations = 30L)
+    .fit <- suppressWarnings(suppressMessages(
+      nlmixr2est::nlmixr2(.ui, .dw, est = "focei", control = .matCtl)))
+    .matEst <- "focei"
+    message(sprintf("nn: population (no-BSV) weight fit via %s, materialized with focei",
+                    .innerEst))
+  }
+  .fit <- .nnAddTablesCov(.fit, .wFit, .baseBases, .aug, .matEst, ctx$origTablesCov)
+  .nnStoreNnFit(ctx, .fit, .wFit,
+                ## same columns as the round loop's parHist (R/nnEst.R): both
+                ## branches fill the one `nnParHist` slot, so a column added to
+                ## one and not the other ships two schemas under one name
+                data.frame(round = 1L, objf = .fit$objf,
+                  pen = .nnPenFrozenValue(ctx$pen, .wFit, .fit$objf),
+                  errAdd = if (is.na(.aug$errAdd)) NA_real_ else .fit$theta[[.aug$errAdd]],
+                  errProp = if (is.na(.aug$errProp)) NA_real_ else .fit$theta[[.aug$errProp]],
+                  rmse = NA_real_, wChange = NA_real_, objfChange = NA_real_),
+                converged = TRUE, nRun = 1L)
+}
+
+## The two population pre-fits that seed the loop.  Both act on the torch modules
+## in place and return nothing -- the weights ARE the state being warmed.
+.nnRunWarmStarts <- function(ctx) {
+  .aug <- ctx$aug
+  .data <- ctx$data
+  .idCol <- ctx$idCol
+  .timeCol <- ctx$timeCol
+  .obs <- ctx$obs
+  .dv <- ctx$dv
+  .wPlaceholder <- ctx$wPlaceholder
+  .th0 <- ctx$th0
+  .errPar0 <- ctx$errPar0
+  .existing <- ctx$existing
+  .weightStep <- ctx$weightStep
+  sched <- ctx$sched
   ## the nlm bridge: a gradient-based population (eta=0) weight pre-fit seeding the
   ## joint fit with a robust weight vector (unless the model already carries
   ## trained weights, in which case those are the warm start).
   if (!identical(sched$warmStart, "none") && is.null(.existing)) {
-    .wPop <- .nnPopWarmStart(.aug, .data, .idCol, .obs, .dv, .wPlaceholder,
+    .wPop <- .nnPopWarmStart(.aug, .data, .idCol, .timeCol, .obs, .dv, .wPlaceholder,
                              .th0, .errPar0, .nnAllTorchWeights(.aug),
-                             sched$warmStart, sched$warmPopIters)
+                             sched$warmStart, sched$warmPopIters, pen = ctx$pen)
     .nnSetAllTorchWeights(.aug, .wPop)
     message(sprintf("nn: population (nlm-bridge, %s) warm start applied", sched$warmStart))
   }
@@ -960,7 +433,37 @@
     .ebes0 <- stats::setNames(rep(0, length(.ids)), .ids)
     for (.ws in seq_len(sched$warmSteps)) .weightStep(.ebes0, .errPar0s, .th0)
   }
+  invisible()
+}
 
+## The round loop.  mode="joint" interleaves warm-started PARTIAL inner steps
+## (outerPerRound outer iterations, via the estimator's outer-step knob) with
+## weight steps -- co-descending the population parameters and the weights -- and
+## falls back to the block-coordinate iterate loop for inner estimators without a
+## partial outer step; mode="iter" runs a full inner fit each round.
+##
+## Returns the last inner fit plus the history needed to finish it -- deliberately
+## NOT the finished fit, so the loop can be run and inspected on its own, without
+## the table and covariance work.
+.nnRunLoop <- function(ctx) {
+  .ui <- ctx$ui
+  .data <- ctx$data
+  .aug <- ctx$aug
+  .innerEst <- ctx$innerEst
+  .innerCtl <- ctx$control
+  .baseBases <- ctx$baseBases
+  .weightStep <- ctx$weightStep
+  .hasEta <- ctx$hasEta
+  .latent <- ctx$latent
+  .exact <- ctx$exact
+  .exactSelf <- ctx$exactSelf
+  .exactPosthoc <- ctx$exactPosthoc
+  .capDims <- ctx$capDims
+  .capStride <- ctx$capStride
+  .obsKey <- ctx$obsKey
+  .knob <- ctx$knob
+  .interleave <- ctx$interleave
+  sched <- ctx$sched
   .parHist <- vector("list", sched$rounds)
   .fit <- NULL
   .curUi <- .ui
@@ -996,7 +499,8 @@
     ## self-captures, else from a dedicated FOCEi posthoc at the fit's estimates
     ## (maxOuter=0 keeps the outer parameters, re-optimizes the EBEs, and fires the
     ## contribution hook cleanly).  The augmented solve then uses THOSE EBEs.
-    .dLLdfObs <- NULL; .ebeFit <- .fit
+    .dLLdfObs <- NULL
+    .ebeFit <- .fit
     if (.exact) {
       if (.exactPosthoc) {
         ## This capture fit is FOCEi, whatever the round's estimator is -- so the
@@ -1014,7 +518,8 @@
         ## back to the round's estimator for everything after
         .nnSetNetBases(.aug$nets, .baseBases)
       }
-      .cap <- .nnCapGet(); .nnCapReset(FALSE)
+      .cap <- .nnCapGet()
+      .nnCapReset(FALSE)
       if (!is.null(.cap) && length(.cap$id)) {
         .cand <- .cap$dLLdf[match(.obsKey, .cap$id * .capStride + .cap$k)]
         if (!anyNA(.cand)) .dLLdfObs <- .cand
@@ -1035,58 +540,54 @@
           call. = FALSE)
       }
     }
+    ## population: no EBEs
     .ebes <- if (.hasEta) {
       stats::setNames(.ebeFit$eta[[.latent]], as.character(.ebeFit$eta[["ID"]]))
-    } else stats::setNames(numeric(0), character(0))         # population: no EBEs
+    } else {
+      stats::setNames(numeric(0), character(0))
+    }
     .thetas <- .fit$theta
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
                     prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
+    ## The penalty AT THE WEIGHTS THE INNER FIT JUST SAW -- before any weight step
+    ## moves them.  Taking it from the step's return instead would report the
+    ## value at weights up to `wSteps` updates later than the objf beside it, and
+    ## `objf + pen` would then not be a penalized objective at any single point.
+    ## Freeze the normalizer here when the population pre-fit did not already
+    ## (warmStart = "none", e.g. a refit): these are the weights the inner fit
+    ## just saw, so objf and the penalty refer to the same point.
+    .nnPenFreeze(ctx$pen, .nnAllTorchWeights(.aug), .fit$objf)
+    .pen <- .nnPenalty(ctx$pen, .nnAllTorchWeights(.aug))$value
     for (.ws in seq_len(sched$wSteps)) {
       .rmse <- .weightStep(.ebes, .errPar, .thetas, .dLLdfObs)$rmse
     }
     .wNow <- .nnAllTorchWeights(.aug)
     .wChange <- sqrt(sum((.wNow - .wPrev)^2)) / (sqrt(sum(.wPrev^2)) + 1e-8)
     .wPrev <- .wNow
-    .objfChange <- if (is.na(.objfPrev)) Inf else abs(.fit$objf - .objfPrev) / (abs(.objfPrev) + 1e-8)
-    .objfPrev <- .fit$objf
-    .parHist[[.round]] <- data.frame(round = .round, objf = .fit$objf,
+    ## Convergence is judged on what the weight step actually descends -- the
+    ## PENALIZED objective -- while `objf` stays the unpenalized -2LL that gets
+    ## reported and that AIC/BIC are formed from.  With the penalty off, `pen` is
+    ## exactly 0 and this is bit-identical to comparing objf alone.
+    .objfPen <- .fit$objf + .pen
+    .objfChange <- if (is.na(.objfPrev)) Inf else abs(.objfPen - .objfPrev) / (abs(.objfPrev) + 1e-8)
+    .objfPrev <- .objfPen
+    .parHist[[.round]] <- data.frame(round = .round, objf = .fit$objf, pen = .pen,
                                      errAdd = .errPar$add, errProp = .errPar$prop,
                                      rmse = .rmse, wChange = .wChange, objfChange = .objfChange)
     ## stop when the weights (and, when interleaving, the objective) stabilise;
     ## isTRUE guards a NaN change (e.g. an unstable solve) -> keep going, don't crash
     .nnProgressTick(.prog)
     .stop <- isTRUE(.wChange < sched$tol && (!.interleave || .objfChange < sched$tol))
-    if (sched$tol > 0 && .round > 1L && .stop) { .converged <- TRUE; break }
+    if (sched$tol > 0 && .round > 1L && .stop) {
+      .converged <- TRUE
+      break
+    }
   }
   .parHist <- .parHist[seq_len(.nRun)]
   .nnProgressStop(.prog)
   .nnRunSummary(.interleave, .converged, .nRun, sched$rounds, .wChange, .objfChange,
                 .fit$objf, .parHist, .quiet)
 
-  ## the last inner fit IS the deliverable (no re-fit); add tables + covariance
-  ## post-hoc from the user's original control settings.
-  .allW <- .nnAllTorchWeights(.aug)
-  .trained <- stats::setNames(.allW, .aug$weights)
-  .fit <- .nnAddTablesCov(.fit, .allW, .baseBases, .aug, .innerEst, .origTablesCov)
-  .fitEnv <- .fit$env
-  .storedUi <- rxode2::rxUiDecompress(get("ui", envir = .fitEnv))
-  rxode2::rxForcedPars(.storedUi) <- .trained
-  ## snapshot the transient shape registry onto the ui so a reloaded fit can
-  ## rebuild it (.nnRehydrate) and stride the weights carried in rxForcedPars().
-  .nnMeta <- lapply(.nnEnv$reg, function(m) {
-    list(id = m$id, weights = m$weights, K = m$K, H = m$H, act = m$act)
-  })
-  assign("nnMeta", .nnMeta, envir = .storedUi)
-  .sticky <- if (exists("sticky", envir = .storedUi, inherits = FALSE)) {
-    get("sticky", envir = .storedUi, inherits = FALSE)
-  } else character(0)
-  assign("sticky", unique(c(.sticky, "nnMeta")), envir = .storedUi)
-  .nnMarkTrained(.storedUi, .aug)
-  assign("ui", .storedUi, envir = .fitEnv)
-  ## NN metadata in the fit env (NOT $<-, which would add a data column)
-  assign("nnParHist", do.call(rbind, .parHist), envir = .fitEnv)
-  assign("nnWeights", .trained, envir = .fitEnv)
-  assign("nnConverged", .converged, envir = .fitEnv)
-  assign("nnRounds", .nRun, envir = .fitEnv)
-  .fit
+  list(fit = .fit, weights = .nnAllTorchWeights(.aug),
+       parHist = do.call(rbind, .parHist), converged = .converged, nRun = .nRun)
 }

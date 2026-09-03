@@ -22,7 +22,7 @@
 .schedEtaMod <- function() {
   ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
   model({
-    g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
     d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
     centr ~ add(add.sd)
   })
@@ -31,7 +31,7 @@
 .schedPopMod <- function() {
   ini({ add.sd <- 0.3 })
   model({
-    g <- nn(centr, n_hidden = 3L, act = "tanh")
+    g <- nn(centr, nHidden = 3L, act = "tanh")
     d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
     centr ~ add(add.sd)
   })
@@ -40,7 +40,7 @@
 .schedLnormMod <- function() {
   ini({ lsd <- 0.2; eta.nn ~ 0.2 })
   model({
-    g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
     d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
     centr ~ lnorm(lsd)
   })
@@ -122,7 +122,7 @@ test_that("multiple endpoints are refused with a message that names them", {
   m <- function() {
     ini({ add.sd <- 0.3; add.sd2 <- 0.2 })
     model({
-      g <- nn(centr, n_hidden = 3L)
+      g <- nn(centr, nHidden = 3L)
       d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
       eff <- centr * 2
       centr ~ add(add.sd)

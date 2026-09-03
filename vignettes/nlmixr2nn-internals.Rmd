@@ -53,7 +53,7 @@ call and a declaration of the weights:
 library(nlmixr2nn)
 mod <- function() {
   model({
-    d/dt(centr) <- -nn(centr, n_hidden = 3) * centr
+    d/dt(centr) <- -nn(centr, nHidden = 3) * centr
   })
 }
 set.seed(1)
@@ -251,6 +251,72 @@ A short list, each of which cost real time:
 - **A tryCatch around an unexported call.** `nlmixr2est::nlmSolveR` does not
   exist (it is internal); the error was swallowed by a `tryCatch` returning `NA`,
   so an entire code path silently never ran.
+- **The two weight-gradient sites are on different objective scales.**
+  `R/nnWeightStep.R` hands torch a gradient of $-\log L$; `R/nnPopFit.R`
+  optimizes $-2\log L$. The weight penalty (below) is defined on the
+  $-2\log L$ scale, so adding the same vector at both would make one `l2` mean
+  two different things inside a single fit, with nothing in the output to say so.
+  `.nnAddPen(g, w, pen, scale)` takes the scale explicitly and
+  `test-nn-penalty.R` asserts the invariant
+  `2 * .nnAddPen(g, w, pen, 1L) == .nnAddPen(2 * g, w, pen, 2L)`.
+- **Plain `sum(W1^2)` is not L2 here.** Input scaling is folded into the
+  first-layer weights and then discarded (`.nnRescaleW1`), so an input of typical
+  magnitude 500 carries a `W1` column ~500x smaller at equal functional effect.
+  A naive weight-decay term would penalize it 250000x less. The penalty is on the
+  *effective* weight `s_k * W1[j,k]`, which is why the spec carries the input
+  scales.
+- **`nnWeightGrad` outside a solve returns zeros, not an error.** It reads the
+  live solve's `par_ptr`. Anything evaluating a network outside a solve — the
+  curvature penalty, `nnEval()` — must use the explicit-weight entry points
+  `_nlmixr2nn_nnForwardW` / `_nlmixr2nn_nnWeightGradW`. Using the registry form
+  would make the whole penalty vanish silently.
+
+## The weight penalty
+
+`R/nnPenalty.R`. Two terms, both opt-in (`nnControl(l2 = , smooth = )`, both `0` by default):
+
+$$P = -2\log L + \lambda_{2}\sum W_{\text{eff}}^2 + \lambda_{s}\sum C^2$$
+
+`C` is the second difference of the network along one input's marginal curve,
+that input swept over its observed 10th-90th percentile with the others pinned at
+their center. Sweeping each input's *own* range is what makes `smooth` scale-free
+without extra normalization: $C = h^2 f''(x)$ and $h$ is proportional to the
+input's spread, so `C` is curvature with respect to the standardized input.
+
+Inputs with no resolvable range — a latent eta, whose EBEs move every round, or a
+compound expression such as `nn(centr/Vc)` — are held fixed rather than swept.
+
+The gradient reuses the analytic weight Jacobian:
+$\partial C/\partial w = J(x_{i+1}) - 2J(x_i) + J(x_{i-1})$, so there is no new
+autodiff and no new C code.
+
+`nnControl(l2 = 0, smooth = 0)` is a strict no-op: the spec is `NULL`, the
+gradient vector is returned untouched, and the fit is bit-identical to an
+unregularized one.
+
+### Lambda is a fraction, not an amount
+
+Each term carries a normalizer, frozen at the first evaluation that knows an
+objective (the population pre-fit's own objective, or the first inner fit in the
+round loop):
+
+$$k_W = \frac{|\text{objf}|}{\sum W_{\text{eff}}^2}, \qquad
+  k_C = \frac{|\text{objf}|}{\sum C^2}$$
+
+so that each term *starts* at exactly $\lambda$ times the objective. They are
+frozen rather than recomputed, so $P$ stays a fixed objective a gradient can
+descend rather than a moving target; until they are known the penalty is
+inactive and contributes exactly zero.
+
+The two terms are normalized **separately** because their raw scales differ by
+orders of magnitude — measured at ~180× — so one shared normalizer would leave
+the mix between them as arbitrary as the magnitude was.
+
+This is not cosmetic. Under the earlier absolute penalty the E5.5 smoke matrix
+broke at `l2 = 0.1` (the `saem`/`lnorm` cell's RMSE rose instead of falling)
+while visible shrinkage on an over-fitting fit needed `l2 = 1` — the safe range
+and the effective range did not overlap. After normalizing, the whole matrix
+passes to `l2 = 0.3` and the objective-optimal value is `0.05`.
 
 ## Extending
 
@@ -262,7 +328,7 @@ A short list, each of which cost real time:
 - **Another estimator**: teach `.nnEstSolveParams()` which model it solves, and
   `.nnInterleaveKnob()`/`.nnNonResuming` whether its partial fit resumes.
 - **Depth**: `.nnInitDraw()` and the weight layout already take `H` as a vector;
-  the compiled evaluators do not. `nn()` refuses a vector `n_hidden` explicitly
+  the compiled evaluators do not. `nn()` refuses a vector `nHidden` explicitly
   so that boundary is visible.
 
 ## Where to look when something is wrong
