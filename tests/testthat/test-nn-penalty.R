@@ -2,10 +2,14 @@
 ##
 ## Three penalties shape weight training: `l2` shrinks the weights, `smooth`
 ## punishes curvature, and `kinetic` punishes how hard the network pushes along
-## the realized trajectory.  Almost everything here is checkable without a fit, a
-## solve, or even torch -- the penalty is a pure function of the weight vector
-## and a fixed set of input points -- so most of this file is cheap and runs
-## everywhere.
+## the realized trajectory.  All three default to OFF.  `kinetic` is a FRACTION
+## of the objective -- its normalizer is frozen from the first objective a fit
+## produces -- so every test below that wants it to act has to freeze it first,
+## and one that does not is testing that it stays inert.
+##
+## Almost everything here is checkable without a fit, a solve, or even torch --
+## the penalty is a pure function of the weight vector and a fixed set of input
+## points -- so most of this file is cheap and runs everywhere.
 ##
 ## The two properties worth stating up front, because they are the ones that
 ## would break silently:
@@ -46,6 +50,13 @@
   stats::rnorm(spec$nets[[1L]]$nW)
 }
 
+## Freeze the kinetic normalizer at a reference objective, the way a fit does on
+## its first objective evaluation.  Returns the spec so it can be used inline.
+.penFreeze <- function(spec, w, obj = 100) {
+  .nnPenFreeze(spec, w, obj)
+  spec
+}
+
 ## central finite difference of a scalar function of the weight vector
 .penFD <- function(f, w, h = 1e-5) {
   vapply(seq_along(w), function(j) {
@@ -65,15 +76,17 @@ test_that("lambda 0 is a strict no-op, not an approximate one", {
   .g <- c(1.5, -2.25, 0.5)
   expect_identical(.nnAddPen(.g, c(1, 2, 3), NULL, 1L), .g)
   expect_identical(.nnAddPen(.g, c(1, 2, 3), NULL, 2L), .g)
-  expect_identical(.nnAddPenNet(.g, c(1, 2, 3), NULL, 0, 0, 0, 1L), .g)
+  expect_identical(.nnAddPenNet(.g, c(1, 2, 3), NULL, NULL, 1L), .g)
   expect_equal(.nnPenalty(NULL, c(1, 2, 3))$value, 0)
   expect_equal(.nnPenalty(NULL, c(1, 2, 3))$grad, c(0, 0, 0))
 })
 
-test_that("the inferred defaults turn regularization ON", {
-  ## The package is unreleased, so the default is the right one rather than the
-  ## historical one.  This guards against the defaults reverting to 0 through a
-  ## merge, which would be invisible -- every test would still pass.
+test_that("the inferred defaults leave every penalty OFF", {
+  ## All three lambdas default to 0, and that is a decision rather than an
+  ## oversight: in these models the network IS the model, so a penalty big
+  ## enough to suppress invented structure also attenuates real structure.  This
+  ## guards against a default drifting back to nonzero through a merge, which
+  ## would be invisible -- every other test would still pass.
   skip_if_not_installed("rxode2")
   ## a local fixture rather than test-nn-schedule.R's: a filtered run loads only
   ## this file, so anything defined over there is not in scope here
@@ -92,12 +105,14 @@ test_that("the inferred defaults turn regularization ON", {
   .env$control <- list(maxOuterIterations = 5L)
   class(.env) <- c("focei", "environment")
   .s <- .nnInferSched(.env, nW = 13L, hasTrained = FALSE)
-  expect_true(is.numeric(.s$l2) && .s$l2 > 0)
-  expect_true(is.numeric(.s$smooth) && .s$smooth > 0)
-  ## and an explicit 0 survives the overlay, so the escape hatch is reachable
-  .r <- .nnResolveSched(nnControl(l2 = 0, smooth = 0), .s)
-  expect_equal(.r$l2, 0)
-  expect_equal(.r$smooth, 0)
+  expect_equal(.s$l2, 0)
+  expect_equal(.s$smooth, 0)
+  expect_equal(.s$kinetic, 0)
+  ## and an explicit value survives the overlay, so each knob is reachable
+  .r <- .nnResolveSched(nnControl(l2 = 0.05, smooth = 0.05, kinetic = 0.05), .s)
+  expect_equal(.r$l2, 0.05)
+  expect_equal(.r$smooth, 0.05)
+  expect_equal(.r$kinetic, 0.05)
 })
 
 test_that("the -2LL/-LL scale factor is right at both gradient sites", {
@@ -285,9 +300,72 @@ test_that("kinetic 0 is a strict no-op alongside the other two", {
 test_that("the kinetic gradient matches a finite difference", {
   .pen <- .nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.25)
   .w <- .penW(.pen)
+  .penFreeze(.pen, .w)
   expect_equal(.nnPenalty(.pen, .w)$grad,
                .penFD(function(ww) .nnPenalty(.pen, ww)$value, .w),
                tolerance = 1e-7)
+})
+
+test_that("kinetic is a fraction of the objective, and inert until frozen", {
+  ## `kinetic * abs(obj)` per unit mean(f^2) -- the objective side is
+  ## normalized, the term side is not (see the header of R/nnPenalty.R for the
+  ## measurement that rules the other choice out)
+  .pen <- .nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.05)
+  .w <- .penW(.pen)
+  ## before freezing it contributes exactly nothing, and not approximately --
+  ## the gradient comes back as the very same object
+  .g <- seq_along(.w) / 10
+  expect_identical(.nnPenalty(.pen, .w)$value, 0)
+  expect_identical(.nnAddPen(.g, .w, .pen, 1L), .g)
+  .raw <- .nnPenKinTerm(.pen$nets[[1L]], .w)$value
+  .penFreeze(.pen, .w, obj = 400)
+  expect_equal(.nnPenalty(.pen, .w)$value, 0.05 * 400 * .raw)
+  ## a NEGATIVE objective normalizes on its magnitude, not its sign -- a -2LL of
+  ## -124 is an ordinary objective here
+  .p2 <- .penFreeze(.nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.05),
+                    .w, obj = -400)
+  expect_equal(.nnPenalty(.p2, .w)$value, 0.05 * 400 * .raw)
+})
+
+test_that("kinetic scales with the objective, so one lambda travels", {
+  ## the claim the fraction actually makes: doubling the objective -- twice the
+  ## observations, or a different endpoint's -2LL -- doubles the penalty, so
+  ## `kinetic` keeps meaning the same share of the fit rather than fading out.
+  .w <- .penW(.nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.05))
+  .a <- .penFreeze(.nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.05), .w, 200)
+  .b <- .penFreeze(.nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.05), .w, 400)
+  expect_equal(2 * .nnPenalty(.a, .w)$value, .nnPenalty(.b, .w)$value)
+})
+
+test_that("kinetic does not anchor to the near-zero ude starting network", {
+  ## The regression this file exists to prevent.  Dividing by the term's own
+  ## value at w0 looks right and is not: `init = "ude"` starts the network near
+  ## the zero function, so that reference is ~1e-4 and the normalizer comes out
+  ## ~1e4 too large -- measured, kinetic = 0.05 then produced a penalty of 566
+  ## against an objective of 76.  A network whose output grows to a normal size
+  ## must not see the penalty grow past the objective it is a fraction of.
+  .out <- (2L * 3L + 3L + 1L):(2L * 3L + 2L * 3L + 1L)
+  .w <- .penW(.nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.05))
+  .tiny <- .w; .tiny[.out] <- 1e-2 * .tiny[.out]     # a ude-like starting point
+  .pen <- .penFreeze(.nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.05),
+                     .tiny, obj = 400)
+  ## frozen at the tiny network, then evaluated at the full-sized one
+  expect_lt(.nnPenalty(.pen, .w)$value, 400)
+})
+
+test_that("freezing is idempotent and needs a finite objective", {
+  .pen <- .nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.05)
+  .w <- .penW(.pen)
+  ## a non-finite objective must not arm the penalty with a garbage scale
+  .nnPenFreeze(.pen, .w, NA_real_)
+  expect_identical(.nnPenalty(.pen, .w)$value, 0)
+  .nnPenFreeze(.pen, .w, Inf)
+  expect_identical(.nnPenalty(.pen, .w)$value, 0)
+  .nnPenFreeze(.pen, .w, 100)
+  .v <- .nnPenalty(.pen, .w)$value
+  ## a later, different objective must not move the scale -- one fit, one meaning
+  .nnPenFreeze(.pen, .w, 999999)
+  expect_equal(.nnPenalty(.pen, .w)$value, .v)
 })
 
 test_that("the kinetic value is lambda * mean(f^2) over the realized rows", {
@@ -298,9 +376,9 @@ test_that("the kinetic value is lambda * mean(f^2) over the realized rows", {
   ## dynamics must leave the penalty alone.
   .p1 <- .penProfile(n = 25L)
   .p2 <- lapply(.p1, function(.q) { .q$values <- rep(.q$values, 2L); .q })
-  .a <- .nnPenSpec(.penAug(), list(.p1), 0, 0, 0.25)
-  .b <- .nnPenSpec(.penAug(), list(.p2), 0, 0, 0.25)
-  .w <- .penW(.a)
+  .w <- .penW(.nnPenSpec(.penAug(), list(.p1), 0, 0, 0.25))
+  .a <- .penFreeze(.nnPenSpec(.penAug(), list(.p1), 0, 0, 0.25), .w)
+  .b <- .penFreeze(.nnPenSpec(.penAug(), list(.p2), 0, 0, 0.25), .w)
   expect_equal(.nnPenalty(.a, .w)$value, .nnPenalty(.b, .w)$value)
 })
 
@@ -310,6 +388,7 @@ test_that("kinetic charges for pushing hard, and a null network pays nothing", {
   ## trained one up is quadratically expensive
   .pen <- .nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 1)
   .w <- .penW(.pen)
+  .penFreeze(.pen, .w)
   .zero <- numeric(length(.w))
   expect_equal(.nnPenalty(.pen, .zero)$value, 0)
   ## only the output layer scales f linearly; doubling W2 and b2 doubles f, so
@@ -359,12 +438,13 @@ test_that("kinetic obeys the -2LL/-LL scale factor and adds to the others", {
   ## the one that breaks silently if a new term is added at the wrong site
   .pen <- .nnPenSpec(.penAug(), list(.penProfile()), 0.01, 1, 0.25)
   .w <- .penW(.pen)
+  .penFreeze(.pen, .w)
   set.seed(11)
   .g <- stats::rnorm(length(.w))
   expect_equal(2 * .nnAddPen(.g, .w, .pen, 1L), .nnAddPen(2 * .g, .w, .pen, 2L))
   ## and the three terms are additive, so each can be reasoned about alone
   .l2s <- .nnPenSpec(.penAug(), list(.penProfile()), 0.01, 1, 0)
-  .kin <- .nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.25)
+  .kin <- .penFreeze(.nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.25), .w)
   expect_equal(.nnPenalty(.pen, .w)$value,
                .nnPenalty(.l2s, .w)$value + .nnPenalty(.kin, .w)$value)
 })
@@ -377,6 +457,7 @@ test_that("a penalty spec built before kinetic existed still evaluates", {
   .w <- .penW(.pen)
   .old <- .pen
   .old$kinetic <- NULL
+  .old$env <- NULL
   expect_equal(.nnPenalty(.old, .w)$value, .nnPenalty(.pen, .w)$value)
   expect_equal(.nnPenalty(.old, .w)$grad, .nnPenalty(.pen, .w)$grad)
 })

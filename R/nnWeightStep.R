@@ -104,8 +104,7 @@
         .g <- -.dLLdw
         if (!is.null(pen)) {
           .wNet <- nnTorchWeights(.net$id)
-          .g <- .nnAddPenNet(.g, .wNet, .penOf[[as.character(.net$id)]],
-                             pen$l2, pen$smooth, pen$kinetic, 1L)
+          .g <- .nnAddPenNet(.g, .wNet, pen, .penOf[[as.character(.net$id)]], 1L)
           if (!all(is.finite(.g))) {
             stop(sprintf(paste0(
               "nlmixr2nn: the weight penalty made the gradient for network %s ",

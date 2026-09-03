@@ -93,10 +93,18 @@
 #'   Both penalties shape the OPTIMIZATION only.  The reported `objf` (and hence
 #'   AIC/BIC) stays the unpenalized -2 log-likelihood, so a regularized network
 #'   model remains directly comparable to an analytic-covariate one.
-#' @param kinetic kinetic-energy (optimal-transport) penalty.  Adds
-#'   `kinetic * mean(f^2)`, where `f` is the network's output evaluated at the
-#'   JOINTLY REALIZED input rows of a trial solve -- the trajectory the model
-#'   actually produces over the real dosing and time grid, not a synthetic grid.
+#' @param kinetic kinetic-energy (optimal-transport) penalty, as a FRACTION of
+#'   the objective.  `kinetic = 0.05` means the kinetic term starts at 5% of the
+#'   objective, whatever the endpoint, estimator or data size; the normalizer is
+#'   frozen once, from the first objective the fit produces, so the term is
+#'   inert for that first evaluation and live afterwards.  An absolute lambda
+#'   could not mean one thing across models -- the raw term's scale follows the
+#'   network's output scale, which follows the model.
+#'
+#'   The term itself is `mean(f^2)`, where `f` is the network's output evaluated
+#'   at the JOINTLY REALIZED input rows of a trial solve -- the trajectory the
+#'   model actually produces over the real dosing and time grid, not a synthetic
+#'   grid.
 #'   Where `smooth` asks whether the learned function is wiggly in the abstract,
 #'   this asks how hard the network is pushing where the solution really goes,
 #'   which is a statement about the dynamics the ODE solver has to integrate.
@@ -109,14 +117,14 @@
 #'   variational state per (state x weight), so every solver step a smoother
 #'   right-hand side saves is multiplied by the whole sensitivity block.
 #'
-#'   OFF by default (`0`), unlike `l2` and `smooth`.  The asymmetry is
-#'   deliberate: those two steer only the optimizer, whereas this one changes the
-#'   dynamics being solved, and a default that quietly flattens a learned rate
-#'   would be a default that quietly changes the model.  Reach for it when the
-#'   augmented solve is slow, or when the learned term looks stiffer than the
-#'   data justifies.  Inputs the trial solve does not carry -- an eta, or a
-#'   compound expression such as `nn(central/Vc)` -- are held at their center
-#'   rather than being paired with rows they never occurred with.
+#'   OFF by default (`0`).  It changes the dynamics being solved rather than
+#'   only steering the optimizer, and a default that quietly flattens a learned
+#'   rate would be a default that quietly changes the model.  Reach for it when
+#'   the augmented solve is slow, or when the learned term looks stiffer than
+#'   the data justifies, and check the result with [nnEval()].  Inputs the trial
+#'   solve does not carry -- an eta, or a compound expression such as
+#'   `nn(central/Vc)` -- are held at their center rather than being paired with
+#'   rows they never occurred with.
 #' @param optimizer torch optimizer, `"adam"` or `"sgd"`.
 #' @param cotangent source of the endpoint score `dLL/df` used to form the weight
 #'   gradient.  `"gaussian"` is the closed-form additive/proportional Gaussian

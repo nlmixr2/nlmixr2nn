@@ -132,6 +132,11 @@
     ##
     ## This objective is already -2LL, the scale R/nnPenalty.R is defined on, so
     ## the penalty is added outright -- .nnAddPen(g, w, pen, 2L) by another name.
+    ## `kinetic` is a FRACTION of the objective, so its normalizer is frozen from
+    ## the first objective any evaluation produces -- here, where the objective
+    ## and the weights that produced it are both in hand.  Idempotent, so the
+    ## remaining evaluations just use it.
+    .nnPenFreeze(pen, w, .obj)
     .pn <- .nnPenalty(pen, w)
     list(obj = .obj + .pn$value,
          grad = -2 * vapply(aug$predswCols, function(cn) sum(.dLLdf * .s[[cn]][.ik]),

@@ -115,20 +115,32 @@ comparable to one with an analytic covariate relationship.
 
 | penalty | acts on | where it is measured | default |
 |---|---|---|---|
-| `l2` | weight magnitude | the weights themselves | 0.01 |
-| `smooth` | curvature | a synthetic partial-dependence grid | 1 |
+| `l2` | weight magnitude | the weights themselves | 0 (off) |
+| `smooth` | curvature | a synthetic partial-dependence grid | 0 (off) |
 | `kinetic` | how hard the network pushes | the realized trajectory | 0 (off) |
+
+All three are off by default, which is measured rather than cautious: in these
+models the network *is* the model, so a penalty large enough to suppress
+structure the data does not support also attenuates structure it does.
 
 `l2` and `smooth` are described in the main vignette. `kinetic` comes from this
 literature and is the one worth explaining here.
 
 ### The kinetic term
 
-`kinetic` adds `kinetic * mean(f^2)`, where `f` is the network's output at the
+`kinetic` charges for `mean(f^2)`, where `f` is the network's output at the
 **jointly realized input rows** of a trial solve -- the trajectory the model
 actually produces over the real dosing and time grid. It is the kinetic-energy
 or optimal-transport regularizer of Finlay et al. (2020): it asks the learned
 dynamics to reach the same data by pushing less hard.
+
+The lambda is a **fraction of the objective**, not an absolute amount:
+`kinetic = 0.05` means the term starts at 5% of the objective. An absolute
+lambda could not mean one thing across models, because the raw term's scale
+follows the network's output scale, which follows the model. The normalizer is
+`|objf| / mean(f^2)` at the starting weights, frozen once from the first
+objective the fit produces -- so the term is inert for that first evaluation and
+live afterwards, and a penalty is never applied at an unknown relative scale.
 
 ```{r, eval = FALSE}
 nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(kinetic = 0.1))
@@ -153,10 +165,10 @@ implementation uses, because the norm is not differentiable at zero and a UDE
 network initialized as a small perturbation of the mechanistic model
 (`init = "ude"`, the default) starts very close to exactly there.
 
-It is **off by default**, unlike the other two, and the asymmetry is the point:
-`l2` and `smooth` steer only the optimizer, while `kinetic` changes the dynamics
-being solved. A default that quietly flattens a learned elimination rate would
-be a default that quietly changes the model.
+It is **off by default**, like the other two -- but for an extra reason worth
+keeping separate: `l2` and `smooth` steer only the optimizer, while `kinetic`
+changes the dynamics being solved. A default that quietly flattens a learned
+elimination rate would be a default that quietly changes the model.
 
 Two things recommend turning it on. In Worsham and Kalita's comparison it was
 the single largest improvement of any lever they measured -- roughly halving the

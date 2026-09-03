@@ -236,61 +236,57 @@ nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(rounds = 400, lr = 0.01))
 | `cotangent` | the Gaussian closed form for an untransformed `add()`/`prop()` endpoint, the distribution's own score for a count endpoint, the captured exact score otherwise | rarely — a source the endpoint cannot support is an error, not a silent fallback |
 | `lr`, `optimizer` | 0.03 (0.01 on a refit), Adam | the objective oscillates or moves too slowly |
 | `warmStart` | a population pre-fit, skipped when the model already carries trained weights | you want a longer or shorter pre-fit |
-| `l2`, `smooth` | a light penalty on the weights and on curvature, applied by default | the network still looks over-fitted, or you want the unpenalized fit back |
+| `l2`, `smooth` | off | the network looks over-fitted |
 | `kinetic` | off | the learned term looks stiff, or the augmented solve is slow |
 
-### Regularization is on by default
+### Regularization, when a network learns too much
 
 A network with more capacity than the data supports will invent structure — a
 covariate curve with sharp wiggles in it, or per-subject variation that should
 have gone to the random effect. It does this silently: the fit converges, the
 objective looks fine, and only the learned shape gives it away.
 
-So two penalties are applied by default. `l2` shrinks the weights; `smooth`
-charges for curvature specifically, penalizing the *second* derivative of the
-network along each input, which leaves a monotone slope free and pays only for
-the wiggles. Biases are never penalized, so the network can still move its output
-level for nothing.
+Three penalties are available for that, and **all three are off by default**:
 
-Both shape the optimization only. The reported `objf` — and so AIC and BIC — stays
-the unpenalized -2 log-likelihood, which means a regularized network model is
-still directly comparable to one with an analytic covariate relationship.
+- `l2` shrinks the weights.
+- `smooth` charges for curvature specifically, penalizing the *second*
+  derivative of the network along each input, which leaves a monotone slope free
+  and pays only for the wiggles.
+- `kinetic` asks the network to reach the same data while pushing less hard,
+  charging for its output along the trajectory the model actually produces
+  rather than on a grid of input combinations that may never occur.
 
-To turn regularization off completely:
-
-```{r, eval = FALSE}
-nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(l2 = 0, smooth = 0))
-```
-
-That reproduces an unpenalized fit exactly — zero is a strict no-op, not a small
-number.
-
-A third penalty, `kinetic`, exists and is **off** by default. It asks the network
-to reach the same data while pushing less hard — charging for its output along
-the trajectory the model actually produces, rather than on a grid of input
-combinations that may never occur:
+Biases are never penalized, so the network can still move its output level for
+nothing.
 
 ```{r, eval = FALSE}
-nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(kinetic = 0.1))
-```
-
-Where `l2` and `smooth` steer only the optimizer, this one changes the dynamics
-being solved — which is why it is not a default, and why it can make a fit
-*faster* as well as smoother. `vignette("nlmixr2nn-node")` explains where it
-comes from, how it differs from `smooth`, and which other ideas from the neural
-ODE literature do and do not carry over to a model like this one.
-
-The defaults are set conservatively: low enough not to disturb any supported
-estimator and endpoint combination, which is lower than the value that does the
-most good on a model that really is over-fitting. So if a fitted curve still
-looks wigglier than the data can justify, raise `l2` — around `1` is where
-shrinkage becomes substantial — and check the result with `nnEval()` and
-`plot()`:
-
-```{r, eval = FALSE}
-fit <- nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(l2 = 1))
+fit <- nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(l2 = 0.05))
 plot(nnEval(fit, centr = seq(0, 10, length.out = 101)))
 ```
+
+Off by default is a decision, not caution. In these models the network *is* the
+model, so a penalty large enough to suppress structure the data does not support
+is also large enough to attenuate structure it does. Reach for one deliberately,
+when a fitted curve looks wigglier than the data can justify — and look at what
+the network learned with `nnEval()` afterwards rather than trusting the objective
+alone, because real effects shrink alongside invented ones.
+
+`kinetic` is the one to reach for when the *solve* is the problem rather than the
+shape: it makes the learned dynamics easier to integrate, so it can make a fit
+faster as well as smoother. Unlike the other two it changes the dynamics being
+solved, not just where the optimizer goes.
+
+`kinetic` is a **fraction of the objective**: `kinetic = 0.05` means the term
+starts at 5% of the objective, so one value means roughly the same thing whatever
+the endpoint, estimator or data size. Its normalizer is frozen from the first
+objective the fit produces, so it is inert for that first evaluation.
+
+All three shape the optimization only. The reported `objf` — and so AIC and BIC —
+stays the unpenalized -2 log-likelihood, so a regularized network model is still
+directly comparable to one with an analytic covariate relationship.
+`vignette("nlmixr2nn-node")` explains where `kinetic` comes from, how it differs
+from `smooth`, and which other ideas from the neural ODE literature do and do not
+carry over to a model like this one.
 
 ## What is supported
 

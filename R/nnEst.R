@@ -383,7 +383,7 @@
                 ## branches fill the one `nnParHist` slot, so a column added to
                 ## one and not the other ships two schemas under one name
                 data.frame(round = 1L, objf = .fit$objf,
-                  pen = .nnPenalty(ctx$pen, .wFit)$value,
+                  pen = .nnPenFrozenValue(ctx$pen, .wFit, .fit$objf),
                   errAdd = if (is.na(.aug$errAdd)) NA_real_ else .fit$theta[[.aug$errAdd]],
                   errProp = if (is.na(.aug$errProp)) NA_real_ else .fit$theta[[.aug$errProp]],
                   rmse = NA_real_, wChange = NA_real_, objfChange = NA_real_),
@@ -521,7 +521,9 @@
     ## moves them.  Taking it from the step's return instead would report the
     ## value at weights up to `wSteps` updates later than the objf beside it, and
     ## `objf + pen` would then not be a penalized objective at any single point.
-    .pen <- .nnPenalty(ctx$pen, .nnAllTorchWeights(.aug))$value
+    ## freeze the kinetic normalizer from this round's objective the first time
+    ## one exists (R/nnPenalty.R); a no-op afterwards and when kinetic is off
+    .pen <- .nnPenFrozenValue(ctx$pen, .nnAllTorchWeights(.aug), .fit$objf)
     for (.ws in seq_len(sched$wSteps)) {
       .rmse <- .weightStep(.ebes, .errPar, .thetas, .dLLdfObs)$rmse
     }

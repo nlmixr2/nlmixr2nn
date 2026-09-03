@@ -133,9 +133,12 @@
     ## would throw them away
     warmStart = if (hasTrained) "none" else "lbfgsb3c",
     warmPopIters = 3L,
-    ## Regularization is ON by default (R/nnPenalty.R).  An unregularized network
-    ## invents covariate-driven variation and says nothing about it, so the
-    ## unpenalized fit is the wrong default even though it is the historical one.
+    ## Regularization is OFF by default (R/nnPenalty.R), and that is measured
+    ## rather than cautious.  An unregularized network does invent
+    ## covariate-driven variation silently -- but in these models the network IS
+    ## the model, so any lambda large enough to suppress structure the data does
+    ## not support also attenuates structure it does.  A default that quietly
+    ## shrinks a real learned effect is worse than one that requires a decision.
     ## Deliberately light: enough to damp runaway weight growth on a null
     ## structure, not enough to flatten a network that is fitting something real.
     ## The penalty is O(1) while -2LL is O(n observations), so a constant lambda
@@ -167,12 +170,13 @@
     ## supported combination, and `nnControl(l2 = 1)` is the documented knob for a
     ## model that is visibly overfitting.
     ##
-    ## `kinetic` is OFF by default where l2/smooth are on, and the asymmetry is
-    ## deliberate: those two only steer the optimizer, while this one changes the
-    ## dynamics the SOLVER has to integrate.  A default that quietly flattens a
+    ## `kinetic` is a FRACTION of the objective (R/nnPenalty.R), so 0.05 means
+    ## "start at 5% of the objective" rather than an absolute amount.  It is OFF
+    ## by default: it changes the dynamics the SOLVER has to integrate rather
+    ## than only steering the optimizer, and a default that quietly flattens a
     ## learned rate would be a default that quietly changes the model.  Turn it
     ## on when the augmented solve is slow or the learned term looks stiff.
-    l2 = 0.01, smooth = 1, kinetic = 0)
+    l2 = 0, smooth = 0, kinetic = 0)
 
   if (.isNlm) {
     ## The population branch has only the closed-form Gaussian score available
