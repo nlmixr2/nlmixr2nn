@@ -45,7 +45,7 @@ mod <- function() {
   })
 }
 
-set.seed(42)
+rxode2::rxSetSeed(42)
 ui <- rxode2::rxode2(mod)
 ```
 
@@ -58,9 +58,12 @@ what make a random effect passed *into* a network identifiable.
 cat(paste(ui$lstChr, collapse = "\n"))
 ```
 
-The weights were drawn when the model was parsed, using R's random number
-generator — so `set.seed()` reproduces a network exactly, in this session or any
-other, and the model is ready to solve immediately.
+The weights were drawn when the model was parsed, using rxode2's threefry
+generator — so `rxSetSeed()` reproduces a network exactly, in this session or any
+other, and the model is ready to solve immediately. Threefry is also the
+generator whose stream is defined across threads, so a network is reproducible
+in the same places a parallel solve is. Drawing weights disturbs neither the R
+stream nor the rxode2 seed.
 
 ```{r, eval = .hasRx}
 head(nnWeights(ui), 4)
@@ -86,7 +89,8 @@ subjects; the model knows only that elimination is *some* bounded function of th
 amount, and a latent random effect `eta.nn` enters the network as an input.
 
 ```{r, eval = .hasTorch}
-set.seed(1)
+rxode2::rxSetSeed(1)   # pins the network
+set.seed(1)            # pins the simulated data below
 truth <- rxode2::rxode2("d/dt(centr) = -(2*exp(eV))*centr/(3+centr)")
 etaTrue <- rnorm(8, 0, sqrt(0.15))
 d <- do.call(rbind, lapply(1:8, function(id) {
@@ -156,6 +160,7 @@ with a population optimizer — `"bobyqa"`, `"nlminb"`, `"lbfgsb3c"` and friends
 and there is no eta to estimate.
 
 ```{r, eval = .hasTorch}
+rxode2::rxSetSeed(1)
 set.seed(1)
 qspTruth <- rxode2::rxode2("d/dt(centr) = -(2)*centr/(3+centr)")
 qd <- do.call(rbind, lapply(1:6, function(id) {

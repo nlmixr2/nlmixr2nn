@@ -56,7 +56,7 @@ mod <- function() {
     d/dt(centr) <- -nn(centr, n_hidden = 3) * centr
   })
 }
-set.seed(1)
+rxode2::rxSetSeed(1)
 ui <- rxode2::rxode2(mod)
 cat(paste(ui$lstChr, collapse = "\n"))
 ```
@@ -70,7 +70,10 @@ model rather than the data. The dummy `rx_nnw0_` line exists only so rxode2's
 covariate detection sees the names.
 
 **The weights are drawn when the model is parsed**, with R's RNG, in
-`R/nnInit.R`. So `set.seed()` reproduces a network, and a parsed model is
+`R/nnInit.R`, drawn with rxode2's threefry generator (`rxnorm`/`rxunif`)
+inside `rxWithSeed()`, which restores both the R stream and the rxode2 seed. So
+`rxSetSeed()` reproduces a network -- and does so under threads, which R's RNG
+cannot promise -- and a parsed model is
 solvable immediately without libtorch. torch is loaded *from* these values
 rather than generating its own, which is what makes a whole fit reproducible
 under a single seed.

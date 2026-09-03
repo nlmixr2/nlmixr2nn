@@ -37,11 +37,19 @@ rxUdfUi.nn <- function(fun) {
 #' the network's analytic input derivative -- exact, no finite differences -- and
 #' it is far more identifiable than a random effect on every weight.
 #'
-#' The network's initial weights are drawn WHEN THE MODEL IS PARSED, using R's
-#' random number generator, and are carried on the model itself.  So
-#' `set.seed(1)` makes a network reproducible across sessions, and a freshly
-#' parsed model is immediately solvable -- no torch module and no setup call.
-#' Drawing a network's weights does not disturb the caller's random stream.
+#' The network's initial weights are drawn WHEN THE MODEL IS PARSED, using
+#' rxode2's threefry generator, and are carried on the model itself.  So
+#' [rxode2::rxSetSeed()] makes a network reproducible across sessions -- and,
+#' because threefry is the generator whose stream is defined under multiple
+#' threads, reproducible in the same places a parallel solve is.  A freshly
+#' parsed model is immediately solvable: no torch module and no setup call.
+#'
+#' Drawing weights disturbs nothing.  Every draw runs inside
+#' [rxode2::rxWithSeed()], which saves and restores both the R stream and the
+#' rxode2 seed, so adding a network never shifts the draws elsewhere in a
+#' script.  A bare `set.seed()` still pins a model -- it is the fallback used
+#' when `rxSetSeed()` has not been called -- but `rxSetSeed()` is the one to
+#' reach for.
 #'
 #' @param ... one or more state/covariate inputs to the network (given
 #'   positionally, e.g. `nn(central, t)`).
@@ -57,30 +65,97 @@ rxUdfUi.nn <- function(fun) {
 #' @param initSd scale of the initialization: the output-layer standard
 #'   deviation for `init = "ude"`, and the standard deviation of every weight
 #'   for `init = "normal"`.
-#' @param seed optional integer pinning THIS network's initial weights
-#'   regardless of the ambient seed.  Normally unnecessary -- use `set.seed()`.
+#' @param aug number of AUGMENTED states to add (0-3, default 0) -- the ANODE
+#'   construction of Dupont et al. (2019).  **Experimental and not yet usable:**
+#'   the augmented states are built and solved correctly, but training an
+#'   augmented network is not reliable yet and can fit much worse than
+#'   `aug = 0`.  It warns when used.  `aug = k` creates `k` extra
+#'   compartments `rx_nnaug<id>_1..k`, starts them at zero, gives each its own
+#'   learned derivative, and passes all of them to this network as additional
+#'   inputs.  It is exactly what you would get by writing
+#'
+#'   ```
+#'   d/dt(a1) <- nn(centr, a1, a2)
+#'   d/dt(a2) <- nn(centr, a1, a2)
+#'   g        <- nn(centr, a1, a2)
+#'   ```
+#'
+#'   by hand, and exists because the thing it fixes is invisible: a learned flow
+#'   in one dimension cannot cross itself, so `d/dt(centr) <- -f(nn(centr))`
+#'   is topologically constrained no matter how well it is fitted or how much
+#'   capacity it has.  Extra dimensions remove the constraint.
+#'
+#'   The cost is real and worth weighing.  The augmented solve carries one
+#'   variational state per (state x weight), and `aug = k` multiplies BOTH: it
+#'   adds `k` states and `k` more networks.  Start at 1.
+#'
+#'   With `init = "ude"` (the default) every augmented derivative starts near
+#'   zero, so the augmented states stay near zero and contribute nothing until
+#'   training finds a use for them -- the zero-augmentation start ANODE
+#'   prescribes.  (The network itself is still a fresh draw over the wider input
+#'   vector, so this is not the same model as `aug = 0`.)  Total inputs
+#'   (`...` plus `aug`) may not exceed 4.
+#'
+#'   Each augmented state RELAXES rather than integrates:
+#'   `d/dt(a) = f(x, a) - a`.  The textbook drift, `d/dt(a) = f(x, a)`, is
+#'   self-exciting here -- `a` re-enters its own derivative through the network --
+#'   and blows the solver up on a real dosing horizon.  The `- a` gives it a
+#'   stable fixed point at `f`, at the price of a fixed memory timescale of one
+#'   model time unit.
+#' @param seed optional integer pinning THIS `nn()` call's initial weights
+#'   regardless of the ambient seed.  Normally unnecessary -- use
+#'   [rxode2::rxSetSeed()].  Every network is drawn at `seed + <network id>`, so
+#'   the networks of an `aug =` call differ from each other rather than all
+#'   drawing the same weights.
 #' @param num network occurrence number; queried via `rxUdfUiNum()` if `NULL`.
 #' @param iniDf initial-estimate data.frame; queried via `rxUdfUiIniDf()` if
 #'   `NULL`.
 #' @return a list consumed by [rxode2::rxUdfUi()] (`replace`, `before`).
+#'
+#' @references
+#' Dupont E, Doucet A, Teh YW (2019). "Augmented neural ODEs." *Advances in
+#' Neural Information Processing Systems* 32.  See
+#' `vignette("nlmixr2nn-node")` for what else from that literature does and
+#' does not carry over.
 #' @export
 nn <- function(..., n_hidden = 5L,
                act = c("softplus", "tanh", "relu", "gelu", "silu"),
-               init = c("ude", "torch", "normal"), initSd = 0.1,
+               init = c("ude", "torch", "normal"), initSd = 0.1, aug = 0L,
                seed = NULL, num = NULL, iniDf = NULL) {
   act <- match.arg(act)
   init <- match.arg(init)
   checkmate::assertNumeric(initSd, lower = 0, len = 1L, .var.name = "initSd")
+  ## upper = 3 is not a policy choice: an augmented network reads its own
+  ## augmented states, so K = length(...) + aug, and the compiled family only
+  ## goes to nn4.  With at least one real input, aug can never exceed 3.
+  checkmate::assertIntegerish(aug, lower = 0L, upper = .nnAugMax, len = 1L,
+                              .var.name = "aug")
+  aug <- as.integer(aug)
+  if (aug > 0L) {
+    ## EXPERIMENTAL, and the warning is not boilerplate.  The construction is
+    ## right -- the states are created, zero-initialized, registered and solved --
+    ## but training an augmented model does NOT yet work: measured on a
+    ## population UDE fit, aug = 1 lands far worse than aug = 0 under bobyqa,
+    ## lbfgsb3c and nlminb alike, while both networks' weights move.  The weight
+    ## gradient through the augmented sensitivity path has not been
+    ## finite-difference checked yet, and that is the next thing to do.
+    warning("nn(aug=) is EXPERIMENTAL: the augmented states solve correctly, ",
+            "but training an augmented network is not yet reliable and can fit ",
+            "much worse than aug = 0.  Do not use it for real work yet.",
+            call. = FALSE)
+  }
   ## capture positional inputs symbolically (do NOT evaluate them)
   .dots <- as.list(substitute(list(...)))[-1L]
   ## drop any named options accidentally caught in ... (n_hidden/act/sd)
   .nm <- names(.dots)
   if (!is.null(.nm)) .dots <- .dots[.nm == "" | is.na(.nm)]
   .inputs <- vapply(.dots, function(e) deparse1(e), character(1))
-  K <- length(.inputs)
-  if (K < 1L) stop("nn() needs at least one input", call. = FALSE)
+  if (length(.inputs) < 1L) stop("nn() needs at least one input", call. = FALSE)
+  K <- length(.inputs) + aug
   if (K > 4L) {
-    stop("nn() supports 1 to 4 inputs (nn1..nn4)", call. = FALSE)
+    stop("nn() supports 1 to 4 inputs (nn1..nn4), and each augmented state is ",
+         "an input too: ", length(.inputs), " given plus aug = ", aug,
+         " is ", K, ".  Drop an input or lower `aug`.", call. = FALSE)
   }
   ## a vector n_hidden (a deeper network) is rejected HERE, at the user
   ## boundary, rather than deeper down: the initialization and the weight layout
@@ -97,8 +172,27 @@ nn <- function(..., n_hidden = 5L,
   id <- num - 1L                       # 0-based id used by the compiled layer
   if (is.null(iniDf)) iniDf <- rxUdfUiIniDf()
 
-  wnames <- nnWeightLayout(id, K, H)
+  ## AUGMENTATION (ANODE).  `aug = k` adds k compartments that this network both
+  ## reads and drives.  Every network here -- the user's and the augmented ones --
+  ## sees the SAME input vector [user inputs, augmented states], which is what
+  ## makes it the ANODE construction rather than k unrelated networks: the flow
+  ## being learned is the one on the whole augmented state.
+  ##
+  ## rxode2 starts a compartment at 0 and needs no declaration for it, so the
+  ## zero-augmentation initial condition comes for free.
+  .augStates <- if (aug > 0L) sprintf("rx_nnaug%d_%d", id, seq_len(aug)) else character(0)
+  .allInputs <- c(.inputs, .augStates)
+  .argList <- paste(.allInputs, collapse = ",")
+  .callOf <- function(i) paste0("nn", K, "(", i, ",", .argList, ")")
 
+  ## record layout so nnUpdate() resolves the base index and nnCovData() adds cols.
+  ## The FIRST nn() of a model parse (num == 1) resets the registry, so networks
+  ## from a PREVIOUS model do not leak in (otherwise a later single-nn model would
+  ## still carry a stale id-1 network from an earlier multi-nn model).
+  if (num == 1L) .nnEnv$reg <- list()
+
+  ## Register one network and return its weight-covariate declaration line.
+  ##
   ## Declare the weight block as COVARIATES (not param()/thetas).  Reason: the
   ## torch/loader owns the weights (they are not nlmixr2 parameters), and -- unlike
   ## param()-declared thetas, which FOCEI theta-expands and mangles at model
@@ -107,23 +201,78 @@ nn <- function(..., n_hidden = 5L,
   ## covariates; their placeholder values are added to the data by nnCovData() and
   ## are overwritten by the par-loader (population) / inner hook (individual) on
   ## every solve.
-  .before <- paste0("rx_nnw", id, "_ <- ", paste(wnames, collapse = " + "))
-
-  ## record layout so nnUpdate() resolves the base index and nnCovData() adds cols.
-  ## The FIRST nn() of a model parse (num == 1) resets the registry, so networks
-  ## from a PREVIOUS model do not leak in (otherwise a later single-nn model would
-  ## still carry a stale id-1 network from an earlier multi-nn model).
-  if (num == 1L) .nnEnv$reg <- list()
-  ## the weights are DRAWN HERE, at parse time, with R's RNG (R/nnInit.R).  They
+  ##
+  ## The weights are DRAWN HERE, at parse time, with R's RNG (R/nnInit.R).  They
   ## are moved onto the ui by .nnAdopt() the moment the model is assembled --
   ## `rxUdfUi()` has no field that could carry a value out of this function.
-  .values <- .nnDrawSeeded(id, K, H, act, init, initSd, seed)
-  .nnEnv$reg[[as.character(id)]] <-
-    list(id = id, K = K, H = H, act = act, weights = wnames,
-         values = stats::setNames(.values, wnames), metaVersion = 1L)
+  .register <- function(netId, netSeed) {
+    .wn <- nnWeightLayout(netId, K, H)
+    .v <- .nnDrawSeeded(netId, K, H, act, init, initSd, netSeed)
+    .nnEnv$reg[[as.character(netId)]] <-
+      list(id = netId, K = K, H = H, act = act, weights = .wn,
+           values = stats::setNames(.v, .wn), metaVersion = 1L)
+    paste0("rx_nnw", netId, "_ <- ", paste(.wn, collapse = " + "))
+  }
 
-  .replace <- paste0("nn", K, "(", id, ",", paste(.inputs, collapse = ","), ")")
-  list(replace = .replace, before = .before)
+  .augIds <- vapply(seq_len(aug), function(j) .nnAugId(id, j), integer(1))
+  ## `seed` is passed through unchanged: .nnDrawSeeded() offsets every draw by
+  ## the network id, so these get distinct weights even when the user pins one
+  ## seed for the whole model
+  .before <- c(.register(id, seed),
+               vapply(seq_len(aug), function(j) .register(.augIds[[j]], seed),
+                      character(1)),
+               ## Each augmented state's own learned derivative, RELAXING rather
+               ## than integrating: d/dt(a) = f(x, a) - a.
+               ##
+               ## The textbook ANODE drift is d/dt(a) = f(x, a) with nothing
+               ## holding it down, which is fine over the short fixed horizons
+               ## that literature integrates.  It is unusable here.  `a` feeds
+               ## back into its own derivative through the network, and the
+               ## default activation (softplus) is unbounded above, so the
+               ## augmented equation is self-exciting: measured, the latent
+               ## reached 1e154 by t = 5, LSODA gave up ("h too small for machine
+               ## precision"), and the objective stopped depending on the weights
+               ## at all -- every optimizer then stalls at its starting point,
+               ## which is exactly what it looked like.  A bounded activation only
+               ## downgrades that from exponential to linear drift, which
+               ## saturates the network over a real dosing horizon instead.
+               ##
+               ## The `- a` term makes it a first-order filter with a stable fixed
+               ## point at f(x, a): still a genuine extra dimension -- which is
+               ## all the non-crossing argument needs -- but one that cannot run
+               ## away.  The cost is a fixed memory timescale of one model time
+               ## unit; a learned decay rate would lift that and is the obvious
+               ## next step.
+               vapply(seq_len(aug),
+                      function(j) paste0("d/dt(", .augStates[[j]], ") <- ",
+                                         .callOf(.augIds[[j]]), " - ",
+                                         .augStates[[j]]),
+                      character(1)))
+
+  list(replace = .callOf(id), before = .before)
+}
+
+## The most augmented states a network can have: it reads them all, so
+## K = length(inputs) + aug <= 4 with at least one real input.
+.nnAugMax <- 3L
+
+## Id of the j-th augmented network belonging to network `id`.
+##
+## Primary ids are handed out by rxode2 as `rxUdfUiNum() - 1`, counting upward
+## from 0, so the augmented ones are allocated DOWNWARD from the top of the
+## compiled registry.  The two ranges cannot meet in any model that the C layer
+## (NN_MAX = 256 networks) would accept in the first place.
+##
+## Stateless on purpose: a counter would have to survive rxode2 re-parsing the
+## same model, and would make a network's weights depend on how many nn() calls
+## happened to precede it.
+.nnAugId <- function(id, j) {
+  .aid <- 255L - as.integer(id) * .nnAugMax - (as.integer(j) - 1L)
+  if (.aid <= id) {
+    stop("nn(aug=) ran out of network ids; this model has far too many ",
+         "networks", call. = FALSE)
+  }
+  .aid
 }
 attr(rxUdfUi.nn, "nargs") <- NULL   # variadic
 

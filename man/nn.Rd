@@ -10,6 +10,7 @@ nn(
   act = c("softplus", "tanh", "relu", "gelu", "silu"),
   init = c("ude", "torch", "normal"),
   initSd = 0.1,
+  aug = 0L,
   seed = NULL,
   num = NULL,
   iniDf = NULL
@@ -35,8 +36,49 @@ libtorch's `nn::Linear` default; `"normal"` is a flat `N(0, initSd)`.}
 deviation for `init = "ude"`, and the standard deviation of every weight
 for `init = "normal"`.}
 
-\item{seed}{optional integer pinning THIS network's initial weights
-regardless of the ambient seed.  Normally unnecessary -- use `set.seed()`.}
+\item{aug}{number of AUGMENTED states to add (0-3, default 0) -- the ANODE
+  construction of Dupont et al. (2019).  **Experimental and not yet usable:**
+  the augmented states are built and solved correctly, but training an
+  augmented network is not reliable yet and can fit much worse than
+  `aug = 0`.  It warns when used.  `aug = k` creates `k` extra
+  compartments `rx_nnaug<id>_1..k`, starts them at zero, gives each its own
+  learned derivative, and passes all of them to this network as additional
+  inputs.  It is exactly what you would get by writing
+
+  ```
+  d/dt(a1) <- nn(centr, a1, a2)
+  d/dt(a2) <- nn(centr, a1, a2)
+  g        <- nn(centr, a1, a2)
+  ```
+
+  by hand, and exists because the thing it fixes is invisible: a learned flow
+  in one dimension cannot cross itself, so `d/dt(centr) <- -f(nn(centr))`
+  is topologically constrained no matter how well it is fitted or how much
+  capacity it has.  Extra dimensions remove the constraint.
+
+  The cost is real and worth weighing.  The augmented solve carries one
+  variational state per (state x weight), and `aug = k` multiplies BOTH: it
+  adds `k` states and `k` more networks.  Start at 1.
+
+  With `init = "ude"` (the default) every augmented derivative starts near
+  zero, so the augmented states stay near zero and contribute nothing until
+  training finds a use for them -- the zero-augmentation start ANODE
+  prescribes.  (The network itself is still a fresh draw over the wider input
+  vector, so this is not the same model as `aug = 0`.)  Total inputs
+  (`...` plus `aug`) may not exceed 4.
+
+  Each augmented state RELAXES rather than integrates:
+  `d/dt(a) = f(x, a) - a`.  The textbook drift, `d/dt(a) = f(x, a)`, is
+  self-exciting here -- `a` re-enters its own derivative through the network --
+  and blows the solver up on a real dosing horizon.  The `- a` gives it a
+  stable fixed point at `f`, at the price of a fixed memory timescale of one
+  model time unit.}
+
+\item{seed}{optional integer pinning THIS `nn()` call's initial weights
+regardless of the ambient seed.  Normally unnecessary -- use
+[rxode2::rxSetSeed()].  Every network is drawn at `seed + <network id>`, so
+the networks of an `aug =` call differ from each other rather than all
+drawing the same weights.}
 
 \item{num}{network occurrence number; queried via `rxUdfUiNum()` if `NULL`.}
 
@@ -61,9 +103,23 @@ population network, e.g. `g <- nn(central, eta.latent)` with
 the network's analytic input derivative -- exact, no finite differences -- and
 it is far more identifiable than a random effect on every weight.
 
-The network's initial weights are drawn WHEN THE MODEL IS PARSED, using R's
-random number generator, and are carried on the model itself.  So
-`set.seed(1)` makes a network reproducible across sessions, and a freshly
-parsed model is immediately solvable -- no torch module and no setup call.
-Drawing a network's weights does not disturb the caller's random stream.
+The network's initial weights are drawn WHEN THE MODEL IS PARSED, using
+rxode2's threefry generator, and are carried on the model itself.  So
+[rxode2::rxSetSeed()] makes a network reproducible across sessions -- and,
+because threefry is the generator whose stream is defined under multiple
+threads, reproducible in the same places a parallel solve is.  A freshly
+parsed model is immediately solvable: no torch module and no setup call.
+
+Drawing weights disturbs nothing.  Every draw runs inside
+[rxode2::rxWithSeed()], which saves and restores both the R stream and the
+rxode2 seed, so adding a network never shifts the draws elsewhere in a
+script.  A bare `set.seed()` still pins a model -- it is the fallback used
+when `rxSetSeed()` has not been called -- but `rxSetSeed()` is the one to
+reach for.
+}
+\references{
+Dupont E, Doucet A, Teh YW (2019). "Augmented neural ODEs." *Advances in
+Neural Information Processing Systems* 32.  See
+`vignette("nlmixr2nn-node")` for what else from that literature does and
+does not carry over.
 }

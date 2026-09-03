@@ -48,12 +48,37 @@ test_that("a parsed model is seeded and solves with no setup call", {
   expect_true(any(s$cp != 0))
 })
 
-test_that("set.seed() reproduces a network, and different seeds differ", {
-  set.seed(42); a <- nnWeights(suppressMessages(rxode2::rxode2(.zbMod)))
-  set.seed(42); b <- nnWeights(suppressMessages(rxode2::rxode2(.zbMod)))
-  set.seed(43); c <- nnWeights(suppressMessages(rxode2::rxode2(.zbMod)))
-  expect_identical(a, b)
-  expect_false(isTRUE(all.equal(unname(a), unname(c))))
+test_that("rxSetSeed() reproduces a network, and different seeds differ", {
+  ## rxode2's seed is the one that matters: the weights are drawn from the
+  ## threefry stream, so this is the seed a parallel solve would also honour.
+  .w <- function(.s) {
+    rxode2::rxSetSeed(.s)
+    nnWeights(suppressMessages(rxode2::rxode2(.zbMod)))
+  }
+  expect_identical(.w(42), .w(42))
+  expect_false(isTRUE(all.equal(unname(.w(42)), unname(.w(43)))))
+})
+
+test_that("set.seed() still pins a network when rxSetSeed() has not been used", {
+  ## The fallback, and the boundary worth stating: `set.seed()` reaches the
+  ## weights ONLY while rxode2's own seed is unset.  Once `rxSetSeed()` has been
+  ## called it takes priority, and `set.seed()` no longer changes a network --
+  ## which is why the reset below is part of the test rather than tidying.
+  .w <- function(.s) {
+    rxode2::rxSetSeed(-1L)
+    set.seed(.s)
+    nnWeights(suppressMessages(rxode2::rxode2(.zbMod)))
+  }
+  expect_identical(.w(42), .w(42))
+  expect_false(isTRUE(all.equal(unname(.w(42)), unname(.w(43)))))
+
+  ## and the priority itself: with rxode2's seed set, set.seed() is inert here
+  rxode2::rxSetSeed(7)
+  set.seed(1); .a <- nnWeights(suppressMessages(rxode2::rxode2(.zbMod)))
+  rxode2::rxSetSeed(7)
+  set.seed(2); .b <- nnWeights(suppressMessages(rxode2::rxode2(.zbMod)))
+  expect_identical(.a, .b)
+  rxode2::rxSetSeed(-1L)
 })
 
 test_that("building a model does not disturb the caller's random stream", {
@@ -62,6 +87,11 @@ test_that("building a model does not disturb the caller's random stream", {
   set.seed(99); invisible(suppressMessages(rxode2::rxode2(.zbMod)))
   got <- stats::runif(3)
   expect_equal(got, ref)
+  ## and the rxode2 stream is restored too -- rxWithSeed() saves both
+  rxode2::rxSetSeed(123)
+  invisible(suppressMessages(rxode2::rxode2(.zbMod)))
+  expect_identical(rxode2::rxGetSeed(), 123L)
+  rxode2::rxSetSeed(-1L)
 })
 
 test_that("two nn models are alive at once without contaminating each other", {
