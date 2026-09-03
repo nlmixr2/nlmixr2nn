@@ -1,9 +1,11 @@
 ## The weight penalty (R/nnPenalty.R).
 ##
-## Two penalties shape weight training: `l2` shrinks the weights, `smooth`
-## punishes curvature.  Almost everything here is checkable without a fit, a
+## Three penalties shape weight training: `l2` shrinks the weights, `smooth`
+## punishes curvature, and `kinetic` punishes how hard the network pushes along
+## the realized trajectory.  Almost everything here is checkable without a fit, a
 ## solve, or even torch -- the penalty is a pure function of the weight vector
-## and a fixed grid -- so most of this file is cheap and runs everywhere.
+## and a fixed set of input points -- so most of this file is cheap and runs
+## everywhere.
 ##
 ## The two properties worth stating up front, because they are the ones that
 ## would break silently:
@@ -27,11 +29,15 @@
   list(nets = nets, nW = sum(vapply(nets, function(.n) .n$nW, integer(1))))
 }
 
-## a profile with a real range on every input, so grids exist
-.penProfile <- function(K = 2L, scales = rep(1, K), lo = 0, hi = 1) {
+## a profile with a real range on every input, so grids exist.  `values` is the
+## realized trajectory the kinetic term reads; `vals = FALSE` drops it, which is
+## what an eta or a compound expression looks like.
+.penProfile <- function(K = 2L, scales = rep(1, K), lo = 0, hi = 1,
+                        vals = TRUE, n = 25L) {
   lapply(seq_len(K), function(.k) {
     list(name = paste0("x", .k), kind = "trial", scale = scales[.k],
-         center = (lo + hi) / 2, range = c(lo, hi))
+         center = (lo + hi) / 2, range = c(lo, hi),
+         values = if (vals) seq(lo, hi, length.out = n) + .k / 100 else NULL)
   })
 }
 
@@ -59,7 +65,7 @@ test_that("lambda 0 is a strict no-op, not an approximate one", {
   .g <- c(1.5, -2.25, 0.5)
   expect_identical(.nnAddPen(.g, c(1, 2, 3), NULL, 1L), .g)
   expect_identical(.nnAddPen(.g, c(1, 2, 3), NULL, 2L), .g)
-  expect_identical(.nnAddPenNet(.g, c(1, 2, 3), NULL, 0, 0, 1L), .g)
+  expect_identical(.nnAddPenNet(.g, c(1, 2, 3), NULL, 0, 0, 0, 1L), .g)
   expect_equal(.nnPenalty(NULL, c(1, 2, 3))$value, 0)
   expect_equal(.nnPenalty(NULL, c(1, 2, 3))$grad, c(0, 0, 0))
 })
@@ -257,4 +263,120 @@ test_that("each network is penalized against its own weight block", {
   ## zeroing one net's weights must leave the other net's gradient untouched
   .w2 <- .w; .w2[.n1$gIdx] <- 0
   expect_equal(.nnPenalty(.pen, .w2)$grad[.n0$gIdx], .g[.n0$gIdx])
+})
+
+
+## --------------------------------------------------------------------------
+## kinetic: the trajectory-realized term (R/nnPenalty.R)
+## --------------------------------------------------------------------------
+
+test_that("kinetic 0 is a strict no-op alongside the other two", {
+  ## the escape hatch has to survive the third lambda: all three at 0 is still
+  ## the identical-object no-op, and `kinetic` alone is enough to build a spec
+  .aug <- .penAug()
+  expect_null(.nnPenSpec(.aug, list(.penProfile()), 0, 0, 0))
+  .k <- .nnPenSpec(.aug, list(.penProfile()), 0, 0, 0.25)
+  expect_false(is.null(.k))
+  ## ... and it builds ONLY what it needs: points, not a curvature grid
+  expect_false(is.null(.k$nets[[1L]]$pts))
+  expect_length(.k$nets[[1L]]$grids, 0L)
+})
+
+test_that("the kinetic gradient matches a finite difference", {
+  .pen <- .nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.25)
+  .w <- .penW(.pen)
+  expect_equal(.nnPenalty(.pen, .w)$grad,
+               .penFD(function(ww) .nnPenalty(.pen, ww)$value, .w),
+               tolerance = 1e-7)
+})
+
+test_that("the kinetic value is lambda * mean(f^2) over the realized rows", {
+  ## MEAN, not sum.  The curvature grid is a fixed 11 points so a sum over it is
+  ## dataset-independent, but the kinetic point set is however many rows the
+  ## trial solve produced -- summing there would make one lambda mean something
+  ## different for every dataset.  So doubling the number of rows at the same
+  ## dynamics must leave the penalty alone.
+  .p1 <- .penProfile(n = 25L)
+  .p2 <- lapply(.p1, function(.q) { .q$values <- rep(.q$values, 2L); .q })
+  .a <- .nnPenSpec(.penAug(), list(.p1), 0, 0, 0.25)
+  .b <- .nnPenSpec(.penAug(), list(.p2), 0, 0, 0.25)
+  .w <- .penW(.a)
+  expect_equal(.nnPenalty(.a, .w)$value, .nnPenalty(.b, .w)$value)
+})
+
+test_that("kinetic charges for pushing hard, and a null network pays nothing", {
+  ## the term exists to shrink the network's contribution to the derivative
+  ## where the solution actually goes, so a zero network is free and scaling a
+  ## trained one up is quadratically expensive
+  .pen <- .nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 1)
+  .w <- .penW(.pen)
+  .zero <- numeric(length(.w))
+  expect_equal(.nnPenalty(.pen, .zero)$value, 0)
+  ## only the output layer scales f linearly; doubling W2 and b2 doubles f, so
+  ## the penalty goes up 4x
+  .K <- 2L; .H <- 3L
+  .out <- (.K * .H + .H + 1L):(.K * .H + 2L * .H + 1L)
+  .w2 <- .w; .w2[.out] <- 2 * .w2[.out]
+  expect_equal(.nnPenalty(.pen, .w2)$value, 4 * .nnPenalty(.pen, .w)$value)
+})
+
+test_that("kinetic points are jointly realized rows, never fabricated ones", {
+  ## row i must be a combination the model really produced.  An input the trial
+  ## solve does not carry is held at its center rather than paired with rows it
+  ## never occurred with -- that pairing is exactly what this penalty exists to
+  ## avoid, so it is asserted rather than assumed.
+  .p <- .penProfile(2L, lo = 0, hi = 1, n = 9L)
+  .p[[2L]]$values <- NULL
+  .pts <- .nnPenPoints(.p, 2L)
+  expect_equal(nrow(.pts), 9L)
+  expect_equal(.pts[, 1L], .p[[1L]]$values)
+  expect_true(all(.pts[, 2L] == .p[[2L]]$center))
+})
+
+test_that("kinetic degrades to nothing when no input has a trajectory", {
+  ## every input an eta or an expression: there is no realized trajectory, the
+  ## term can only ever be a constant, and that is said once rather than charged
+  ## for silently
+  .p <- .penProfile(vals = FALSE)
+  expect_null(.nnPenPoints(.p, 2L))
+  expect_message(.nnPenSpec(.penAug(), list(.p), 0, 0, 0.25),
+                 "realized trajectory")
+})
+
+test_that("the kinetic point set is capped and non-finite rows are dropped", {
+  ## the term is re-evaluated on every weight step, so a long study is
+  ## subsampled rather than carried whole
+  .p <- .penProfile(n = 5000L)
+  expect_lte(nrow(.nnPenPoints(.p, 2L)), .nnPenN)
+  ## and a row the solve could not produce a finite value for is not a point
+  .q <- .penProfile(n = 25L)
+  .q[[1L]]$values[c(3L, 5L)] <- c(NA_real_, Inf)
+  expect_equal(nrow(.nnPenPoints(.q, 2L)), 23L)
+})
+
+test_that("kinetic obeys the -2LL/-LL scale factor and adds to the others", {
+  ## the invariant from the head of this file, with all three lambdas live --
+  ## the one that breaks silently if a new term is added at the wrong site
+  .pen <- .nnPenSpec(.penAug(), list(.penProfile()), 0.01, 1, 0.25)
+  .w <- .penW(.pen)
+  set.seed(11)
+  .g <- stats::rnorm(length(.w))
+  expect_equal(2 * .nnAddPen(.g, .w, .pen, 1L), .nnAddPen(2 * .g, .w, .pen, 2L))
+  ## and the three terms are additive, so each can be reasoned about alone
+  .l2s <- .nnPenSpec(.penAug(), list(.penProfile()), 0.01, 1, 0)
+  .kin <- .nnPenSpec(.penAug(), list(.penProfile()), 0, 0, 0.25)
+  expect_equal(.nnPenalty(.pen, .w)$value,
+               .nnPenalty(.l2s, .w)$value + .nnPenalty(.kin, .w)$value)
+})
+
+test_that("a penalty spec built before kinetic existed still evaluates", {
+  ## .nnPenalty() reads pen$kinetic, and a hand-built or serialized spec may not
+  ## have the field.  NULL there would make `kinetic > 0` a zero-length
+  ## condition and error out the whole fit rather than skipping the term.
+  .pen <- .nnPenSpec(.penAug(), list(.penProfile()), 0.01, 1, 0)
+  .w <- .penW(.pen)
+  .old <- .pen
+  .old$kinetic <- NULL
+  expect_equal(.nnPenalty(.old, .w)$value, .nnPenalty(.pen, .w)$value)
+  expect_equal(.nnPenalty(.old, .w)$grad, .nnPenalty(.pen, .w)$grad)
 })

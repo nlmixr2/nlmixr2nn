@@ -166,7 +166,13 @@
     ## effective.  Until then the default is set where it cannot hurt any
     ## supported combination, and `nnControl(l2 = 1)` is the documented knob for a
     ## model that is visibly overfitting.
-    l2 = 0.01, smooth = 1)
+    ##
+    ## `kinetic` is OFF by default where l2/smooth are on, and the asymmetry is
+    ## deliberate: those two only steer the optimizer, while this one changes the
+    ## dynamics the SOLVER has to integrate.  A default that quietly flattens a
+    ## learned rate would be a default that quietly changes the model.  Turn it
+    ## on when the augmented solve is slow or the learned term looks stiff.
+    l2 = 0.01, smooth = 1, kinetic = 0)
 
   if (.isNlm) {
     ## The population branch has only the closed-form Gaussian score available

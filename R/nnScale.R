@@ -111,9 +111,10 @@
   }, numeric(1), USE.NAMES = FALSE)
 }
 
-## Everything the curvature penalty needs to know about one network's inputs:
-## per input, its typical magnitude, a center to hold it at while the OTHER
-## inputs are swept, and the range to sweep it over.
+## Everything the two input-space penalties need to know about one network's
+## inputs: per input, its typical magnitude, a center to hold it at while the
+## OTHER inputs are swept, the range to sweep it over (the curvature penalty),
+## and its realized trajectory (the kinetic penalty).
 ##
 ## `trial` is the data.frame from .nnTrialSolve() (NULL if it failed), so the
 ## range is where the inputs actually go over the real dosing and time grid,
@@ -139,10 +140,11 @@
     list(center = stats::median(v),
          range = if (all(is.finite(.q)) && .q[2L] > .q[1L]) .q else NULL)
   }
+  .nTrial <- if (is.null(trial)) 0L else nrow(trial)
   lapply(inputs, function(.in) {
     .src <- .nnInputSource(.in, .ok, names(data), etaNames)
     .out <- list(name = trimws(.in), kind = .src$kind, scale = 1,
-                 center = 0, range = NULL)
+                 center = 0, range = NULL, values = NULL)
     if (identical(.src$kind, "eta") || identical(.src$kind, "expr")) return(.out)
     .v <- if (identical(.src$kind, "trial")) trial[[.src$col]] else data[[.src$col]]
     .s <- .nnTypicalScale(.v)
@@ -151,6 +153,17 @@
     if (!is.null(.sum)) {
       .out$center <- .sum$center
       .out$range <- .sum$range
+    }
+    ## `values` is the input's REALIZED trajectory, kept only when it is
+    ## row-aligned with the trial solve, because the kinetic penalty
+    ## (R/nnPenalty.R) column-binds these into jointly realized input rows.  A
+    ## trial column is aligned by construction; a data column is aligned only if
+    ## it has the same row count, which it usually does NOT (rxSolve drops
+    ## dosing rows).  Dropping it there is the safe half of the trade: the input
+    ## is then held at its center rather than paired with the wrong rows.
+    if (identical(.src$kind, "trial") ||
+          (.nTrial > 0L && length(.v) == .nTrial)) {
+      .out$values <- as.numeric(.v)
     }
     .out
   })

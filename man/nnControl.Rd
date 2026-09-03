@@ -18,7 +18,8 @@ nnControl(
   optimizer = NULL,
   seed = NULL,
   l2 = NULL,
-  smooth = NULL
+  smooth = NULL,
+  kinetic = NULL
 )
 }
 \arguments{
@@ -107,6 +108,31 @@ the model already carries trained weights, which are used as the start).}
   Both penalties shape the OPTIMIZATION only.  The reported `objf` (and hence
   AIC/BIC) stays the unpenalized -2 log-likelihood, so a regularized network
   model remains directly comparable to an analytic-covariate one.}
+
+\item{kinetic}{kinetic-energy (optimal-transport) penalty.  Adds
+  `kinetic * mean(f^2)`, where `f` is the network's output evaluated at the
+  JOINTLY REALIZED input rows of a trial solve -- the trajectory the model
+  actually produces over the real dosing and time grid, not a synthetic grid.
+  Where `smooth` asks whether the learned function is wiggly in the abstract,
+  this asks how hard the network is pushing where the solution really goes,
+  which is a statement about the dynamics the ODE solver has to integrate.
+
+  It is the kinetic-energy / optimal-transport regularizer of the neural-ODE
+  literature (Finlay et al. 2020; Worsham and Kalita 2025 measure it as the
+  single largest improvement among the levers they compare, and one that made
+  training FASTER because the learned dynamics became easier to integrate).
+  That second effect is amplified here: the augmented solve carries one
+  variational state per (state x weight), so every solver step a smoother
+  right-hand side saves is multiplied by the whole sensitivity block.
+
+  OFF by default (`0`), unlike `l2` and `smooth`.  The asymmetry is
+  deliberate: those two steer only the optimizer, whereas this one changes the
+  dynamics being solved, and a default that quietly flattens a learned rate
+  would be a default that quietly changes the model.  Reach for it when the
+  augmented solve is slow, or when the learned term looks stiffer than the
+  data justifies.  Inputs the trial solve does not carry -- an eta, or a
+  compound expression such as `nn(central/Vc)` -- are held at their center
+  rather than being paired with rows they never occurred with.}
 }
 \value{
 an object of class `"nnControl"`.
@@ -124,6 +150,17 @@ Two modes:
   + a torch weight step each round), the DeepPumas-style approach;
 * `"iter"` -- runs a full inner fit each round with the weights fixed, then a
   weight update (simpler solve/update/solve).
+}
+\references{
+Finlay C, Jacobsen J-H, Nurbekyan L, Oberman AM (2020). "How to train your
+neural ODE: the world of Jacobian and kinetic regularization."
+*Proceedings of the 37th International Conference on Machine Learning*,
+3154-3164.
+
+Worsham JM, Kalita JK (2025). "A guide to neural ordinary differential
+equations: machine learning for data-driven digital engineering."
+*Digital Engineering*, 100060.  Reference implementation:
+<https://github.com/joeworsh/Neural-ODE-Guide>
 
 The loop stops when the weights (and, for `"joint"`, the objective) stop
 changing between rounds (`tol`), or after `rounds`.

@@ -191,7 +191,8 @@
   ## fit left behind -- zeros in a fresh session -- and the derived scale, and
   ## therefore the whole fit, stops being reproducible under a fixed set.seed().
   .trial <- NULL
-  if (.untrained || isTRUE(sched$l2 > 0) || isTRUE(sched$smooth > 0)) {
+  if (.untrained || isTRUE(sched$l2 > 0) || isTRUE(sched$smooth > 0) ||
+        isTRUE(sched$kinetic > 0)) {
     for (.net in .aug$nets) {
       nnSetMeta(.net$id, .baseBases[[as.character(.net$id)]], .net$K, .net$H, .net$act)
       nnSetWeights(.net$id, nnTorchWeights(.net$id))
@@ -238,7 +239,7 @@
     if (is.null(.n$inputs)) return(NULL)
     .nnInputProfile(.n$inputs, .trial, .adata, .etaAll)
   }), error = function(e) NULL)
-  .pen <- .nnPenSpec(.aug, .profiles, sched$l2, sched$smooth)
+  .pen <- .nnPenSpec(.aug, .profiles, sched$l2, sched$smooth, sched$kinetic)
 
   .wPlaceholder <- stats::setNames(rep(0, .aug$nW), .aug$weights)
   ## `pen` rides on the FACTORY, not the returned closure, so it is captured once

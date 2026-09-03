@@ -105,12 +105,13 @@
         if (!is.null(pen)) {
           .wNet <- nnTorchWeights(.net$id)
           .g <- .nnAddPenNet(.g, .wNet, .penOf[[as.character(.net$id)]],
-                             pen$l2, pen$smooth, 1L)
+                             pen$l2, pen$smooth, pen$kinetic, 1L)
           if (!all(is.finite(.g))) {
             stop(sprintf(paste0(
               "nlmixr2nn: the weight penalty made the gradient for network %s ",
               "non-finite (%d of %d components).  The optimizer is not stepped. ",
-              "Lower nnControl(l2=)/nnControl(smooth=), or set them to 0."),
+              "Lower nnControl(l2=)/nnControl(smooth=)/nnControl(kinetic=), ",
+              "or set them to 0."),
               .net$id, sum(!is.finite(.g)), length(.g)), call. = FALSE)
           }
         }
