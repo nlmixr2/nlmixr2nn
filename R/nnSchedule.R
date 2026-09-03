@@ -141,32 +141,35 @@
     ## The penalty is O(1) while -2LL is O(n observations), so a constant lambda
     ## self-weakens as the data grows -- which is the behavior you want.
     ## nnControl(l2 = 0, smooth = 0) reproduces an unregularized fit exactly.
-    ## These are calibrated, and deliberately conservative.  Two sweeps set them:
+    ## OFF by default, and that is a measured conclusion rather than caution.
     ##
-    ## What the penalty CAN do, on a null covariate structure that does overfit
-    ## (nnSimData(iiv = FALSE), 30 subjects, n_hidden = 8, 10 rounds):
-    ##   l2 = 1    weight norm 11.5 -> 8.9, curvature -37%, and objf IMPROVES
-    ##   smooth = 100  curvature 1.65e-3 -> 9.3e-4
-    ##   (at smooth = 1000 the weight norm climbs back as the network compensates
-    ##    with larger canceling weights -- the over-constraint signature)
+    ## Lambda is dimensionless (R/nnPenalty.R): `l2 = 0.05` means "the weight term
+    ## starts at 5% of the objective", so one number is at least comparable across
+    ## endpoints and estimators.  It still cannot be turned on by default, because
+    ## the safe range and the useful range do not meet:
     ##
-    ## What it may SAFELY do by default, across the E5.5 smoke matrix
-    ## (focei/saem/impmap/emvi x add/lnorm, each asserting that training
-    ## descends): l2 = 0.1 already breaks the saem + lnorm cell, whose rmse rises
-    ## instead of falling.  0.01 is the largest value that leaves all eight cells
-    ## descending.
+    ##   lambda >= 1e-3   recovery tests FAIL -- test-nn-est.R:123 loses a real
+    ##                    covariate effect (ratio off by 0.97 against a 0.6
+    ##                    tolerance), test-nn-est-joint.R:199 loses the warm start
+    ##   lambda <= 1e-4   recovery tests pass, and the weight norm on a fixture
+    ##                    that genuinely overfits moves 11.511 -> 11.477.  0.3%.
     ##
-    ## Those two ranges do not overlap, and that is worth understanding rather
-    ## than tuning around: the penalty is an ABSOLUTE quantity added to -2LL,
-    ## while the network's weight scale and the likelihood's curvature vary a lot
-    ## between endpoint types and estimators.  A lambda that is light for an
-    ## additive focei fit dominates a lnorm saem one.  Making lambda dimensionless
-    ## -- scaling the penalty by the number of observations, so it stays a fixed
-    ## FRACTION of the objective -- is what would let one default be both safe and
-    ## effective.  Until then the default is set where it cannot hurt any
-    ## supported combination, and `nnControl(l2 = 1)` is the documented knob for a
-    ## model that is visibly overfitting.
-    l2 = 0.01, smooth = 1)
+    ## The reason is structural.  L2 shrinks toward the ZERO FUNCTION, and here the
+    ## network IS the model -- so a lambda big enough to suppress structure the
+    ## data does not support is also big enough to attenuate structure it does.
+    ## One special case of that was fixable and is fixed: a latent eta reaches the
+    ## model only through the network, so its input column is exempt from L2
+    ## (.nnL2Mult), which restored the eta recovery correlation from 0.14 to
+    ## passing.  The covariate channel has no such exemption available -- shrinking
+    ## a learned covariate response is not a side effect of L2 there, it is what
+    ## L2 does.
+    ##
+    ## So the penalty ships as a knob, not a default.  For a model that is visibly
+    ## overfitting, l2 = 0.05 is where shrinkage becomes substantial (weight norm
+    ## 11.5 -> 3.9, curvature -370x, and the unpenalized objective IMPROVES,
+    ## -279.6 -> -428.6); expect real effects to attenuate with it, and check what
+    ## the network learned with nnEval() rather than trusting the objective alone.
+    l2 = 0, smooth = 0)
 
   if (.isNlm) {
     ## The population branch has only the closed-form Gaussian score available

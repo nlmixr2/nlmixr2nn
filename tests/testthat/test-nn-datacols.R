@@ -25,7 +25,7 @@ test_that("the weight gradient does not depend on how the columns are spelled", 
     ini({ lk <- -1; add.sd <- 0.3 })
     model({
       k <- exp(lk)
-      d/dt(centr) <- -k * centr + nn(centr, n_hidden = 2L, act = "tanh")
+      d/dt(centr) <- -k * centr + nn(centr, nHidden = 2L, act = "tanh")
       centr ~ add(add.sd)
     })
   }
@@ -76,7 +76,7 @@ test_that("data missing a required column is refused by name", {
     ini({ lk <- -1; add.sd <- 0.3 })
     model({
       k <- exp(lk)
-      d/dt(centr) <- -k * centr + nn(centr, n_hidden = 2L, act = "tanh")
+      d/dt(centr) <- -k * centr + nn(centr, nHidden = 2L, act = "tanh")
       centr ~ add(add.sd)
     })
   }

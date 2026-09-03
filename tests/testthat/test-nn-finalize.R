@@ -38,7 +38,7 @@ test_that("the finalizer attaches the network, driven from a synthetic ctx", {
     ini({ lk <- -1; add.sd <- 0.3 })
     model({
       k <- exp(lk)
-      d/dt(centr) <- -k * centr + nn(centr, n_hidden = 2L, act = "tanh")
+      d/dt(centr) <- -k * centr + nn(centr, nHidden = 2L, act = "tanh")
       centr ~ add(add.sd)
     })
   }

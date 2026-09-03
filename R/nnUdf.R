@@ -1,6 +1,6 @@
 ## Phase 2: user-facing `nn()` code-generating function.
 ##
-## `nn(state, ..., n_hidden=, act=)` inside an rxode2/nlmixr2 model expands, at
+## `nn(state, ..., nHidden=, act=)` inside an rxode2/nlmixr2 model expands, at
 ## parse time, to a single compiled call `nn<K>(id, in1, ..., inK)` plus a
 ## `param()` declaration of the network's weights and randomized initial
 ## estimates appended to the model `iniDf`.  Unlike pmxNODE's `NN()` (which
@@ -24,7 +24,7 @@ rxUdfUi.nn <- function(fun) {
 
 #' Neural-network term for an rxode2/nlmixr2 model
 #'
-#' Use `nn(state, ..., n_hidden=, act=)` inside a model to insert a
+#' Use `nn(state, ..., nHidden=, act=)` inside a model to insert a
 #' single-hidden-layer neural network of the state input(s).  At parse time it
 #' is replaced by a compiled `nn<K>()` call and its weights are added to the
 #' model as randomly-initialized population parameters.
@@ -45,7 +45,7 @@ rxUdfUi.nn <- function(fun) {
 #'
 #' @param ... one or more state/covariate inputs to the network (given
 #'   positionally, e.g. `nn(central, t)`).
-#' @param n_hidden hidden-layer width (default 5).
+#' @param nHidden hidden-layer width (default 5).
 #' @param act activation, one of "softplus" (default), "tanh", "relu", "gelu" or
 #'   "silu".  The default is smooth with a nonzero second derivative, which
 #'   matters because the model's Jacobian and the FOCEi sensitivities are both
@@ -64,7 +64,7 @@ rxUdfUi.nn <- function(fun) {
 #'   `NULL`.
 #' @return a list consumed by [rxode2::rxUdfUi()] (`replace`, `before`).
 #' @export
-nn <- function(..., n_hidden = 5L,
+nn <- function(..., nHidden = 5L,
                act = c("softplus", "tanh", "relu", "gelu", "silu"),
                init = c("ude", "torch", "normal"), initSd = 0.1,
                seed = NULL, num = NULL, iniDf = NULL) {
@@ -73,7 +73,7 @@ nn <- function(..., n_hidden = 5L,
   checkmate::assertNumeric(initSd, lower = 0, len = 1L, .var.name = "initSd")
   ## capture positional inputs symbolically (do NOT evaluate them)
   .dots <- as.list(substitute(list(...)))[-1L]
-  ## drop any named options accidentally caught in ... (n_hidden/act/sd)
+  ## drop any named options accidentally caught in ... (nHidden/act/sd)
   .nm <- names(.dots)
   if (!is.null(.nm)) .dots <- .dots[.nm == "" | is.na(.nm)]
   .inputs <- vapply(.dots, function(e) deparse1(e), character(1))
@@ -82,16 +82,16 @@ nn <- function(..., n_hidden = 5L,
   if (K > 4L) {
     stop("nn() supports 1 to 4 inputs (nn1..nn4)", call. = FALSE)
   }
-  ## a vector n_hidden (a deeper network) is rejected HERE, at the user
+  ## a vector nHidden (a deeper network) is rejected HERE, at the user
   ## boundary, rather than deeper down: the initialization and the weight layout
   ## below are already written for a vector, so adding depth later is an
   ## additive change to the compiled evaluators, not a redesign.
-  if (length(n_hidden) != 1L) {
-    stop("nn() supports a single hidden layer; `n_hidden` must be one integer ",
+  if (length(nHidden) != 1L) {
+    stop("nn() supports a single hidden layer; `nHidden` must be one integer ",
          "(multi-layer networks are not yet supported)", call. = FALSE)
   }
-  H <- as.integer(n_hidden)
-  checkmate::assertIntegerish(H, lower = 1L, len = 1L, .var.name = "n_hidden")
+  H <- as.integer(nHidden)
+  checkmate::assertIntegerish(H, lower = 1L, len = 1L, .var.name = "nHidden")
 
   if (is.null(num)) num <- rxUdfUiNum()
   id <- num - 1L                       # 0-based id used by the compiled layer

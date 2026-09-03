@@ -6,7 +6,7 @@
 \usage{
 nn(
   ...,
-  n_hidden = 5L,
+  nHidden = 5L,
   act = c("softplus", "tanh", "relu", "gelu", "silu"),
   init = c("ude", "torch", "normal"),
   initSd = 0.1,
@@ -19,7 +19,7 @@ nn(
 \item{...}{one or more state/covariate inputs to the network (given
 positionally, e.g. `nn(central, t)`).}
 
-\item{n_hidden}{hidden-layer width (default 5).}
+\item{nHidden}{hidden-layer width (default 5).}
 
 \item{act}{activation, one of "softplus" (default), "tanh", "relu", "gelu" or
 "silu".  The default is smooth with a nonzero second derivative, which
@@ -47,7 +47,7 @@ regardless of the ambient seed.  Normally unnecessary -- use `set.seed()`.}
 a list consumed by [rxode2::rxUdfUi()] (`replace`, `before`).
 }
 \description{
-Use `nn(state, ..., n_hidden=, act=)` inside a model to insert a
+Use `nn(state, ..., nHidden=, act=)` inside a model to insert a
 single-hidden-layer neural network of the state input(s).  At parse time it
 is replaced by a compiled `nn<K>()` call and its weights are added to the
 model as randomly-initialized population parameters.

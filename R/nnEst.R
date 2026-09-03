@@ -317,10 +317,20 @@
 ## rejects), materialization falls back to FOCEi.  This is "run an nlm-family
 ## optimizer without between-subject variability".
 .nnRunPopFit <- function(ctx) {
-  .ui <- ctx$ui; .data <- ctx$data; .aug <- ctx$aug; .innerEst <- ctx$innerEst
-  .innerCtl <- ctx$control; .baseBases <- ctx$baseBases; .hasEta <- ctx$hasEta
-  .idCol <- ctx$idCol; .timeCol <- ctx$timeCol; .obs <- ctx$obs; .dv <- ctx$dv
-  .wPlaceholder <- ctx$wPlaceholder; .th0 <- ctx$th0; .errPar0 <- ctx$errPar0
+  .ui <- ctx$ui
+  .data <- ctx$data
+  .aug <- ctx$aug
+  .innerEst <- ctx$innerEst
+  .innerCtl <- ctx$control
+  .baseBases <- ctx$baseBases
+  .hasEta <- ctx$hasEta
+  .idCol <- ctx$idCol
+  .timeCol <- ctx$timeCol
+  .obs <- ctx$obs
+  .dv <- ctx$dv
+  .wPlaceholder <- ctx$wPlaceholder
+  .th0 <- ctx$th0
+  .errPar0 <- ctx$errPar0
   sched <- ctx$sched
   .nlmBases <- if (.hasEta) NULL else .nnNlmBase(.ui, .aug)
   ## The exact per-observation score for this branch would come from
@@ -382,7 +392,7 @@
                 ## branches fill the one `nnParHist` slot, so a column added to
                 ## one and not the other ships two schemas under one name
                 data.frame(round = 1L, objf = .fit$objf,
-                  pen = .nnPenalty(ctx$pen, .wFit)$value,
+                  pen = .nnPenFrozenValue(ctx$pen, .wFit, .fit$objf),
                   errAdd = if (is.na(.aug$errAdd)) NA_real_ else .fit$theta[[.aug$errAdd]],
                   errProp = if (is.na(.aug$errProp)) NA_real_ else .fit$theta[[.aug$errProp]],
                   rmse = NA_real_, wChange = NA_real_, objfChange = NA_real_),
@@ -392,11 +402,18 @@
 ## The two population pre-fits that seed the loop.  Both act on the torch modules
 ## in place and return nothing -- the weights ARE the state being warmed.
 .nnRunWarmStarts <- function(ctx) {
-  .aug <- ctx$aug; .data <- ctx$data; .idCol <- ctx$idCol
-  .timeCol <- ctx$timeCol; .obs <- ctx$obs
-  .dv <- ctx$dv; .wPlaceholder <- ctx$wPlaceholder; .th0 <- ctx$th0
-  .errPar0 <- ctx$errPar0; .existing <- ctx$existing
-  .weightStep <- ctx$weightStep; sched <- ctx$sched
+  .aug <- ctx$aug
+  .data <- ctx$data
+  .idCol <- ctx$idCol
+  .timeCol <- ctx$timeCol
+  .obs <- ctx$obs
+  .dv <- ctx$dv
+  .wPlaceholder <- ctx$wPlaceholder
+  .th0 <- ctx$th0
+  .errPar0 <- ctx$errPar0
+  .existing <- ctx$existing
+  .weightStep <- ctx$weightStep
+  sched <- ctx$sched
   ## the nlm bridge: a gradient-based population (eta=0) weight pre-fit seeding the
   ## joint fit with a robust weight vector (unless the model already carries
   ## trained weights, in which case those are the warm start).
@@ -429,13 +446,24 @@
 ## NOT the finished fit, so the loop can be run and inspected on its own, without
 ## the table and covariance work.
 .nnRunLoop <- function(ctx) {
-  .ui <- ctx$ui; .data <- ctx$data; .aug <- ctx$aug; .innerEst <- ctx$innerEst
-  .innerCtl <- ctx$control; .baseBases <- ctx$baseBases
+  .ui <- ctx$ui
+  .data <- ctx$data
+  .aug <- ctx$aug
+  .innerEst <- ctx$innerEst
+  .innerCtl <- ctx$control
+  .baseBases <- ctx$baseBases
   .weightStep <- ctx$weightStep
-  .hasEta <- ctx$hasEta; .latent <- ctx$latent
-  .exact <- ctx$exact; .exactSelf <- ctx$exactSelf; .exactPosthoc <- ctx$exactPosthoc
-  .capDims <- ctx$capDims; .capStride <- ctx$capStride; .obsKey <- ctx$obsKey
-  .knob <- ctx$knob; .interleave <- ctx$interleave; sched <- ctx$sched
+  .hasEta <- ctx$hasEta
+  .latent <- ctx$latent
+  .exact <- ctx$exact
+  .exactSelf <- ctx$exactSelf
+  .exactPosthoc <- ctx$exactPosthoc
+  .capDims <- ctx$capDims
+  .capStride <- ctx$capStride
+  .obsKey <- ctx$obsKey
+  .knob <- ctx$knob
+  .interleave <- ctx$interleave
+  sched <- ctx$sched
   .parHist <- vector("list", sched$rounds)
   .fit <- NULL
   .curUi <- .ui
@@ -471,7 +499,8 @@
     ## self-captures, else from a dedicated FOCEi posthoc at the fit's estimates
     ## (maxOuter=0 keeps the outer parameters, re-optimizes the EBEs, and fires the
     ## contribution hook cleanly).  The augmented solve then uses THOSE EBEs.
-    .dLLdfObs <- NULL; .ebeFit <- .fit
+    .dLLdfObs <- NULL
+    .ebeFit <- .fit
     if (.exact) {
       if (.exactPosthoc) {
         ## This capture fit is FOCEi, whatever the round's estimator is -- so the
@@ -489,7 +518,8 @@
         ## back to the round's estimator for everything after
         .nnSetNetBases(.aug$nets, .baseBases)
       }
-      .cap <- .nnCapGet(); .nnCapReset(FALSE)
+      .cap <- .nnCapGet()
+      .nnCapReset(FALSE)
       if (!is.null(.cap) && length(.cap$id)) {
         .cand <- .cap$dLLdf[match(.obsKey, .cap$id * .capStride + .cap$k)]
         if (!anyNA(.cand)) .dLLdfObs <- .cand
@@ -510,9 +540,12 @@
           call. = FALSE)
       }
     }
+    ## population: no EBEs
     .ebes <- if (.hasEta) {
       stats::setNames(.ebeFit$eta[[.latent]], as.character(.ebeFit$eta[["ID"]]))
-    } else stats::setNames(numeric(0), character(0))         # population: no EBEs
+    } else {
+      stats::setNames(numeric(0), character(0))
+    }
     .thetas <- .fit$theta
     .errPar <- list(add = if (is.na(.aug$errAdd)) 0 else .fit$theta[[.aug$errAdd]],
                     prop = if (is.na(.aug$errProp)) 0 else .fit$theta[[.aug$errProp]])
@@ -520,6 +553,10 @@
     ## moves them.  Taking it from the step's return instead would report the
     ## value at weights up to `wSteps` updates later than the objf beside it, and
     ## `objf + pen` would then not be a penalized objective at any single point.
+    ## Freeze the normalizer here when the population pre-fit did not already
+    ## (warmStart = "none", e.g. a refit): these are the weights the inner fit
+    ## just saw, so objf and the penalty refer to the same point.
+    .nnPenFreeze(ctx$pen, .nnAllTorchWeights(.aug), .fit$objf)
     .pen <- .nnPenalty(ctx$pen, .nnAllTorchWeights(.aug))$value
     for (.ws in seq_len(sched$wSteps)) {
       .rmse <- .weightStep(.ebes, .errPar, .thetas, .dLLdfObs)$rmse
@@ -541,7 +578,10 @@
     ## isTRUE guards a NaN change (e.g. an unstable solve) -> keep going, don't crash
     .nnProgressTick(.prog)
     .stop <- isTRUE(.wChange < sched$tol && (!.interleave || .objfChange < sched$tol))
-    if (sched$tol > 0 && .round > 1L && .stop) { .converged <- TRUE; break }
+    if (sched$tol > 0 && .round > 1L && .stop) {
+      .converged <- TRUE
+      break
+    }
   }
   .parHist <- .parHist[seq_len(.nRun)]
   .nnProgressStop(.prog)

@@ -20,7 +20,9 @@
   ## uses the closed-form additive/proportional-Gaussian cotangent.
   ## the penalty spec keyed by network id, so the per-net lookup inside the step
   ## is a name match rather than a scan
-  .penOf <- if (is.null(pen)) NULL else {
+  .penOf <- if (is.null(pen)) {
+    NULL
+  } else {
     stats::setNames(pen$nets, vapply(pen$nets, function(.s) as.character(.s$id),
                                      character(1)))
   }
@@ -104,8 +106,7 @@
         .g <- -.dLLdw
         if (!is.null(pen)) {
           .wNet <- nnTorchWeights(.net$id)
-          .g <- .nnAddPenNet(.g, .wNet, .penOf[[as.character(.net$id)]],
-                             pen$l2, pen$smooth, 1L)
+          .g <- .nnAddPenNet(.g, .wNet, pen, .penOf[[as.character(.net$id)]], 1L)
           if (!all(is.finite(.g))) {
             stop(sprintf(paste0(
               "nlmixr2nn: the weight penalty made the gradient for network %s ",

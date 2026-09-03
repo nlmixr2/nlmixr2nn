@@ -23,7 +23,7 @@ test_that("an eta-free nn() model assembles and trains under FOCEI (population U
   mod <- function() {
     ini({ add.sd <- 0.5 })                        # no eta: a population UDE
     model({
-      g <- nn(centr, n_hidden = 3L, act = "tanh")
+      g <- nn(centr, nHidden = 3L, act = "tanh")
       d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr   # bounded rate (stable)
       centr ~ add(add.sd)
     })
@@ -63,7 +63,7 @@ test_that("a QSP no-BSV NN model fits with the nlm family (population weight fit
   ## eta-free NN model: learn the (nonlinear) concentration-dependent rate, no eta
   modQSP <- function() {
     ini({ add.sd <- 0.3 })
-    model({ g <- nn(centr, n_hidden = 3L, act = "tanh")
+    model({ g <- nn(centr, nHidden = 3L, act = "tanh")
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
@@ -122,8 +122,8 @@ test_that("multiple nn() networks in one model train jointly", {
 
   mod2 <- function() {
     ini({ add.sd <- 0.3 })
-    model({ ka <- exp(nn(WT, n_hidden = 3L, act = "tanh"))    # network 0: WT -> ka
-            cl <- exp(nn(AGE, n_hidden = 3L, act = "tanh"))   # network 1: AGE -> cl
+    model({ ka <- exp(nn(WT, nHidden = 3L, act = "tanh"))    # network 0: WT -> ka
+            cl <- exp(nn(AGE, nHidden = 3L, act = "tanh"))   # network 1: AGE -> cl
             d/dt(depot) <- -ka * depot
             d/dt(central) <- ka * depot - cl * central
             central ~ add(add.sd) })
@@ -167,7 +167,7 @@ test_that("a K=3 covariate network (QSP, no BSV) fits and reproduces the truth",
 
   mod3 <- function() {
     ini({ add.sd <- 0.3 })
-    model({ cl <- exp(nn(WT, AGE, SEX, n_hidden = 4L, act = "tanh"))   # K = 3 inputs
+    model({ cl <- exp(nn(WT, AGE, SEX, nHidden = 4L, act = "tanh"))   # K = 3 inputs
             d/dt(central) <- -cl * central
             central ~ add(add.sd) })
   }

@@ -13,7 +13,7 @@ test_that("the torch module and the ODE solve agree on the model's weights", {
   skip_if_no_torch()
   mod <- function() {
     ini({ p <- 1 })
-    model({ y <- nn(x, n_hidden = 5, act = "softplus"); d/dt(A) <- -p * A })
+    model({ y <- nn(x, nHidden = 5, act = "softplus"); d/dt(A) <- -p * A })
   }
   set.seed(1)
   ui <- suppressMessages(rxode2::rxode2(mod))

@@ -12,7 +12,7 @@ test_that("the nn par-loader never clobbers an unrelated model's parameters", {
   ## register an nn network with a LARGE weight block + obvious sentinel weights
   mnn <- function() {
     ini({ add.sd <- 0.3 })
-    model({ g <- nn(centr, tk, n_hidden = 10L, act = "tanh")
+    model({ g <- nn(centr, tk, nHidden = 10L, act = "tanh")
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
@@ -42,7 +42,7 @@ test_that("nnWithLoader activates the nn injector for a direct nn-model solve", 
   on.exit({ nnClearMeta(); try(nnTorchFree(0L), silent = TRUE) }, add = TRUE)
   nnClearMeta()
 
-  mod <- function() { model({ y <- nn(x, n_hidden = 4L, act = "tanh"); d/dt(A) <- -A }) }
+  mod <- function() { model({ y <- nn(x, nHidden = 4L, act = "tanh"); d/dt(A) <- -A }) }
   set.seed(1)
   ui <- suppressMessages(rxode2::rxode2(mod))
   ev <- data.frame(id = 1, time = 0, x = 0.7, amt = 0, evid = 0)

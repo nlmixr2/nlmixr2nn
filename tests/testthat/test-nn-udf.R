@@ -10,7 +10,7 @@ test_that("nn() expands to a compiled call and declares weights as covariates", 
   set.seed(3)
   mod <- function() {
     ini({ p <- 1 })
-    model({ y <- nn(x, n_hidden = 4, act = "softplus"); d/dt(A) <- -p * A })
+    model({ y <- nn(x, nHidden = 4, act = "softplus"); d/dt(A) <- -p * A })
   }
   ui <- rxode2::rxode2(mod)
   code <- paste(vapply(ui$lstExpr, deparse1, character(1)), collapse = "\n")
@@ -28,7 +28,7 @@ test_that("nnUpdate resolves a contiguous base from the solve parameter order", 
   set.seed(3)
   mod <- function() {
     ini({ p <- 1 })
-    model({ y <- nn(x, n_hidden = 4, act = "softplus"); d/dt(A) <- -p * A })
+    model({ y <- nn(x, nHidden = 4, act = "softplus"); d/dt(A) <- -p * A })
   }
   ui <- rxode2::rxode2(mod)
   info <- nnUpdate(ui)
@@ -43,7 +43,7 @@ test_that("a model's own weights drive the solve, and a stale buffer cannot over
   set.seed(11)
   mod <- function() {
     ini({ p <- 1 })
-    model({ y <- nn(x, n_hidden = 4, act = "softplus"); d/dt(A) <- -p * A })
+    model({ y <- nn(x, nHidden = 4, act = "softplus"); d/dt(A) <- -p * A })
   }
   ui <- suppressMessages(rxode2::rxode2(mod))
   on.exit(nnClearMeta(), add = TRUE)
@@ -79,7 +79,7 @@ test_that("nn() accepts 1 to 4 inputs and rejects more", {
   for (kk in 1:4) {
     nnClearMeta()
     ins <- paste(c("centr", "WT", "AGE", "SEX")[seq_len(kk)], collapse = ", ")
-    modTxt <- sprintf("function() { model({ g <- nn(%s, n_hidden = 2L); d/dt(centr) <- -g*centr }) }", ins)
+    modTxt <- sprintf("function() { model({ g <- nn(%s, nHidden = 2L); d/dt(centr) <- -g*centr }) }", ins)
     ui <- eval(parse(text = paste0("rxode2::rxode2(", modTxt, ")")))
     reg <- nlmixr2nn:::.nnEnv$reg[[1L]]
     expect_equal(reg$K, kk)
@@ -88,6 +88,6 @@ test_that("nn() accepts 1 to 4 inputs and rejects more", {
   ## 5 inputs is rejected
   nnClearMeta()
   expect_error(
-    rxode2::rxode2(function() { model({ g <- nn(a, b, c, d, e, n_hidden = 2L); d/dt(a) <- -g*a }) }),
+    rxode2::rxode2(function() { model({ g <- nn(a, b, c, d, e, nHidden = 2L); d/dt(a) <- -g*a }) }),
     "1 to 4 inputs")
 })

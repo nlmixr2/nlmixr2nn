@@ -35,7 +35,7 @@ test_that("iterative nn training recovers the population NN shape + IIV and is s
 
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
-    model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    model({ g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }
@@ -145,7 +145,7 @@ test_that("iterative nn training goes through an lhs endpoint (pred is a functio
 
   modL <- function() {
     ini({ add.sd <- 0.2; eta.nn ~ 0.2 })
-    model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    model({ g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             cp <- centr / 2                    # lhs prediction (not a state)
             cp ~ add(add.sd) })
@@ -196,7 +196,7 @@ test_that("iterative nn training works under a proportional error model", {
 
   modP <- function() {
     ini({ prop.sd <- 0.3; eta.nn ~ 0.2 })
-    model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    model({ g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ prop(prop.sd) })
   }
@@ -240,7 +240,7 @@ test_that("iterative nn training works with a SAEM inner estimator", {
 
   modF <- function() {
     ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
-    model({ g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    model({ g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
             d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
             centr ~ add(add.sd) })
   }

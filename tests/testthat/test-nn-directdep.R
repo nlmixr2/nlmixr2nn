@@ -19,7 +19,7 @@ test_that("the augmented model emits the direct term when the prediction needs i
     model({
       k <- exp(lk)
       d/dt(centr) <- -k * centr
-      y <- nn(centr, n_hidden = 2L, act = "tanh")
+      y <- nn(centr, nHidden = 2L, act = "tanh")
       y ~ add(add.sd)
     })
   }
@@ -105,7 +105,7 @@ test_that("the direct term uses each weight's OWN network, with a local index", 
       k <- exp(lk)
       d/dt(centr) <- -k * centr
       ## two networks of DIFFERENT widths, both feeding the prediction directly
-      y <- nn(centr, n_hidden = 2L, act = "tanh") + nn(centr, n_hidden = 3L, act = "tanh")
+      y <- nn(centr, nHidden = 2L, act = "tanh") + nn(centr, nHidden = 3L, act = "tanh")
       y ~ add(add.sd)
     })
   }
@@ -143,7 +143,7 @@ test_that("a registry that disagrees with the model is refused, not indexed past
     model({
       k <- exp(lk)
       d/dt(centr) <- -k * centr
-      y <- nn(centr, n_hidden = 2L, act = "tanh")
+      y <- nn(centr, nHidden = 2L, act = "tanh")
       y ~ add(add.sd)
     })
   }
@@ -170,7 +170,7 @@ test_that("the multi-network direct gradient matches a finite difference", {
     model({
       k <- exp(lk)
       d/dt(centr) <- -k * centr
-      y <- nn(centr, n_hidden = 2L, act = "tanh") + nn(centr, n_hidden = 3L, act = "tanh")
+      y <- nn(centr, nHidden = 2L, act = "tanh") + nn(centr, nHidden = 3L, act = "tanh")
       y ~ add(add.sd)
     })
   }

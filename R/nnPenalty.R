@@ -15,13 +15,36 @@
 ## THE OBJECTIVE SCALE.  Everything here is on the -2LL scale -- the OFV the user
 ## sees:
 ##
-##   P = -2LL + l2 * sum(Weff^2) + smooth * sum(C^2)
+##   P = -2LL + l2 * kW * sum(Weff^2) + smooth * kC * sum(C^2)
+##
+## `kW` and `kC` are NORMALIZERS frozen at the first evaluation that knows an
+## objective, each chosen so that ITS OWN term starts out at exactly lambda times
+## the objective.  That is what makes lambda dimensionless: `l2 = 0.05` means
+## "the weight term starts at 5% of the objective", in any model, under any
+## estimator, on any endpoint.  The two terms are normalized SEPARATELY because
+## they are on wildly different natural scales -- at equal lambda the curvature
+## sum measured ~180x smaller than the weight sum -- so one shared normalizer
+## would leave the mix as arbitrary as the magnitude was.
+##
+## Without it a single default cannot work.  The raw penalty is an ABSOLUTE
+## quantity while -2LL and its curvature vary a lot between endpoint types and
+## estimators, so a lambda that is light for an additive focei fit dominates a
+## lnorm saem one -- measured: l2 = 0.1 raw already drove the saem/lnorm smoke
+## cell's rmse UP, while l2 = 1 raw was needed before shrinkage was visible on an
+## overfitting additive fit.  Those two ranges did not overlap.  Normalizing
+## makes them the same range.
+##
+## They are frozen, not recomputed, so P stays a fixed objective that a gradient
+## can descend rather than a moving target.  Until it is known the penalty is
+## INACTIVE (contributes exactly 0): a penalty applied at an unknown relative
+## scale is the thing this normalizer exists to prevent.
 ##
 ## The two places a weight gradient is assembled do NOT share that scale:
 ## R/nnWeightStep.R works in -LL, R/nnPopFit.R in -2LL.  That is why .nnAddPen()
 ## takes a `scale` and why the invariant
 ##
-##   2 * .nnAddPen(g, w, pen, 1L) == .nnAddPen(2 * g, w, pen, 2L)
+##   twice the -LL-scale addition equals the -2LL-scale addition of twice the
+##   gradient
 ##
 ## is asserted in tests/testthat/test-nn-penalty.R.  Do not "simplify" either
 ## call site without re-reading that test: getting it wrong makes one lambda mean
@@ -43,11 +66,27 @@
 ##
 ## W2 is already scale-free and gets 1.  Biases get 0 -- they stay free, so the
 ## network can still move its output level without paying for it.
-.nnL2Mult <- function(K, H, scales) {
+##
+## A LATENT ETA's input column gets 0 as well, and that exemption is what makes a
+## nonzero default possible at all.  The eta reaches the model only THROUGH the
+## network, so shrinking the weights it multiplies shrinks the random effect
+## itself: penalizing the network and identifying a latent eta pull against each
+## other directly, by construction rather than by degree.  Measured, without the
+## exemption: at a lambda strong enough to shrink visibly the eta recovery
+## correlation collapsed from >0.7 to 0.14, while every lambda weak enough to
+## keep recovery left the weight norm within 0.3% of unpenalized.  The safe and
+## the useful range simply did not meet.
+##
+## Exempting the eta column removes the conflict rather than splitting the
+## difference: the penalty still shrinks the network's response to states and
+## covariates, which is where invented structure actually lives, and leaves the
+## random effect's own channel alone.
+.nnL2Mult <- function(K, H, scales, exempt = logical(K)) {
   .m <- numeric(H * K + 2L * H + 1L)
   if (length(scales) != K || !all(is.finite(scales))) scales <- rep(1, K)
+  if (length(exempt) != K) exempt <- logical(K)
   for (j in seq_len(H) - 1L) {
-    for (k in seq_len(K)) .m[j * K + k] <- scales[k]^2
+    for (k in seq_len(K)) .m[j * K + k] <- if (exempt[k]) 0 else scales[k]^2
   }
   .m[(H * K + H + 1L):(H * K + 2L * H)] <- 1
   .m
@@ -94,12 +133,19 @@
   .nets <- tryCatch(lapply(seq_along(aug$nets), function(.i) {
     .n <- aug$nets[[.i]]
     .p <- if (is.null(profiles)) NULL else profiles[[.i]]
-    .sc <- if (is.null(.p)) rep(1, .n$K) else {
+    .sc <- if (is.null(.p)) {
+      rep(1, .n$K)
+    } else {
       vapply(.p, function(.q) as.numeric(.q$scale), numeric(1))
+    }
+    .exempt <- if (is.null(.p)) {
+      logical(.n$K)
+    } else {
+      vapply(.p, function(.q) identical(.q$kind, "eta"), logical(1))
     }
     list(id = .n$id, K = .n$K, H = .n$H, nW = .n$nW, gIdx = .n$gIdx,
          act = .nnActCode[[.n$act]],
-         mult = .nnL2Mult(.n$K, .n$H, .sc),
+         mult = .nnL2Mult(.n$K, .n$H, .sc, .exempt),
          grids = if (smooth > 0 && !is.null(.p)) .nnPenGrids(.p, .n$K, M) else list())
   }), error = function(e) NULL)
   if (is.null(.nets)) {
@@ -114,19 +160,27 @@
     message("nn: no network input has a resolvable range, so nnControl(smooth=) ",
             "has nothing to act on")
   }
-  list(nets = .nets, nW = aug$nW, l2 = l2, smooth = smooth)
+  ## The normalizer lives in an environment so that freezing it is visible to
+  ## every closure already holding the spec -- the weight stepper captures `pen`
+  ## once, at construction, long before any objective exists.
+  list(nets = .nets, nW = aug$nW, l2 = l2, smooth = smooth,
+       env = local({
+         .e <- new.env(parent = emptyenv())
+         .e$kW <- NA_real_
+         .e$kC <- NA_real_
+         .e
+       }))
 }
 
-## Value + gradient of the penalty for ONE network, on the -2LL scale.
+## The two penalty terms for ONE network, UNWEIGHTED (no lambda, no normalizer).
 ## `w` is that network's own weight vector, in nnWeightLayout() order.
-.nnPenaltyNet <- function(spec, w, l2, smooth) {
-  .val <- 0
-  .grad <- numeric(length(w))
-  if (l2 > 0) {
-    .val <- .val + l2 * sum(spec$mult * w^2)
-    .grad <- .grad + 2 * l2 * spec$mult * w
-  }
-  if (smooth > 0 && length(spec$grids)) {
+## Returns each term's value and its gradient wrt w.
+.nnPenTerms <- function(spec, w, smooth) {
+  .wv <- sum(spec$mult * w^2)
+  .wg <- 2 * spec$mult * w
+  .cv <- 0
+  .cg <- numeric(length(w))
+  if (smooth && length(spec$grids)) {
     for (.g in spec$grids) {
       .M <- nrow(.g)
       if (.M < 3L) next
@@ -134,7 +188,7 @@
                   as.double(w), .g)
       .i <- seq.int(2L, .M - 1L)
       .C <- .f[.i + 1L] - 2 * .f[.i] + .f[.i - 1L]
-      .val <- .val + smooth * sum(.C^2)
+      .cv <- .cv + sum(.C^2)
       ## d(out)/dw at every grid point, once; each row then feeds up to three of
       ## the second differences above.  The registry-based nnWeightGrad reads the
       ## live solve's par_ptr and returns ZEROS outside a solve -- the explicit
@@ -145,27 +199,77 @@
       }, numeric(length(w)))
       for (.t in seq_along(.i)) {
         .m <- .i[.t]
-        .dC <- .J[, .m + 1L] - 2 * .J[, .m] + .J[, .m - 1L]
-        .grad <- .grad + 2 * smooth * .C[.t] * .dC
+        .cg <- .cg + 2 * .C[.t] * (.J[, .m + 1L] - 2 * .J[, .m] + .J[, .m - 1L])
       }
     }
   }
-  list(value = .val, grad = .grad)
+  list(l2 = list(value = .wv, grad = .wg), smooth = list(value = .cv, grad = .cg))
 }
 
-## Value + gradient of the whole model's penalty, on the -2LL scale.
-## `w` is the GLOBAL weight vector (every network concatenated in aug$nets
-## order); the returned gradient matches it.
-.nnPenalty <- function(pen, w) {
-  if (is.null(pen)) return(list(value = 0, grad = numeric(length(w))))
-  .val <- 0
-  .grad <- numeric(length(w))
+## Both terms for the whole model, UNWEIGHTED.  `w` is the GLOBAL weight vector
+## (every network concatenated in aug$nets order); the gradients match it.
+.nnPenaltyRaw <- function(pen, w) {
+  .z <- list(l2 = list(value = 0, grad = numeric(length(w))),
+             smooth = list(value = 0, grad = numeric(length(w))))
+  if (is.null(pen)) return(.z)
+  .out <- .z
   for (.s in pen$nets) {
-    .r <- .nnPenaltyNet(.s, w[.s$gIdx], pen$l2, pen$smooth)
-    .val <- .val + .r$value
-    .grad[.s$gIdx] <- .grad[.s$gIdx] + .r$grad
+    .t <- .nnPenTerms(.s, w[.s$gIdx], pen$smooth > 0)
+    for (.nm in c("l2", "smooth")) {
+      .out[[.nm]]$value <- .out[[.nm]]$value + .t[[.nm]]$value
+      .out[[.nm]]$grad[.s$gIdx] <- .out[[.nm]]$grad[.s$gIdx] + .t[[.nm]]$grad
+    }
   }
-  list(value = .val, grad = .grad)
+  .out
+}
+
+## TRUE once the normalizers are known and the penalty is live.
+.nnPenActive <- function(pen) {
+  !is.null(pen) && !is.na(pen$env$kW)
+}
+
+## Freeze the normalizers from the first objective the fit produces, so that each
+## term starts at `lambda * abs(obj)`.  Called from wherever an objective and the
+## weights are both in hand: the population fit's own objective evaluation
+## (R/nnPopFit.R) and the round loop's first inner fit (R/nnEst.R).  Idempotent --
+## only the first call sets them.
+##
+## A term whose raw value is 0 at the starting weights carries no scale
+## information (a flat network has no curvature to measure).  It is normalized to
+## 0, which switches that term off for this fit rather than dividing by zero --
+## and a term that starts at exactly zero has nothing to shrink anyway.
+.nnPenFreeze <- function(pen, w, obj) {
+  if (is.null(pen) || !is.na(pen$env$kW)) return(invisible(NULL))
+  if (is.null(obj) || !is.finite(obj)) return(invisible(NULL))
+  .r <- .nnPenaltyRaw(pen, w)
+  .k <- function(v) if (is.finite(v) && v > 0) abs(obj) / v else 0
+  ## the weight term is what arms the penalty: it is never legitimately zero for
+  ## a network with any nonzero weight, so if it is, something is wrong and the
+  ## penalty stays inactive rather than guessing a scale
+  if (!is.finite(.r$l2$value) || .r$l2$value <= 0) return(invisible(NULL))
+  pen$env$kW <- .k(.r$l2$value)
+  pen$env$kC <- .k(.r$smooth$value)
+  invisible(NULL)
+}
+
+## Value + gradient of the penalty as it actually enters the objective, on the
+## -2LL scale.  Zero while the normalizers are unknown: a penalty applied at an
+## unknown relative scale is the thing they exist to prevent.
+.nnPenalty <- function(pen, w) {
+  if (!.nnPenActive(pen)) return(list(value = 0, grad = numeric(length(w))))
+  .r <- .nnPenaltyRaw(pen, w)
+  .a <- pen$l2 * pen$env$kW
+  .b <- pen$smooth * pen$env$kC
+  list(value = .a * .r$l2$value + .b * .r$smooth$value,
+       grad = .a * .r$l2$grad + .b * .r$smooth$grad)
+}
+
+## Freeze the normalizers from `obj` if they are not set yet, then report the
+## penalty at `w`.  The population branch (R/nnEst.R) needs both in one
+## expression, because its parHist row is built in a single data.frame() call.
+.nnPenFrozenValue <- function(pen, w, obj) {
+  .nnPenFreeze(pen, w, obj)
+  .nnPenalty(pen, w)$value
 }
 
 ## Add the penalty to a gradient expressed on `scale` * (-LL).
@@ -175,12 +279,15 @@
 ##
 ## The penalty is defined on -2LL, so a -LL-scale gradient takes half of it.
 .nnAddPen <- function(g, w, pen, scale) {
-  if (is.null(pen)) return(g)
+  if (!.nnPenActive(pen)) return(g)
   g + .nnPenalty(pen, w)$grad * (scale / 2)
 }
 
-## Same, for a single network's local gradient and weights.
-.nnAddPenNet <- function(g, w, spec, l2, smooth, scale) {
-  if (is.null(spec)) return(g)
-  g + .nnPenaltyNet(spec, w, l2, smooth)$grad * (scale / 2)
+## Same, for a single network's local gradient and weights.  Takes the whole
+## `pen` rather than one net's spec so that the shared normalizers are in scope.
+.nnAddPenNet <- function(g, w, pen, spec, scale) {
+  if (!.nnPenActive(pen) || is.null(spec)) return(g)
+  .t <- .nnPenTerms(spec, w, pen$smooth > 0)
+  g + (pen$l2 * pen$env$kW * .t$l2$grad +
+         pen$smooth * pen$env$kC * .t$smooth$grad) * (scale / 2)
 }

@@ -109,7 +109,7 @@ nnSimData <- function(ns = 8L, seed = 1L, iiv = TRUE, sd = 0.1,
 nnModUde <- function() {
   ini({ add.sd <- 0.3; eta.nn ~ 0.2 })
   model({
-    g <- nn(centr, eta.nn, n_hidden = 3L, act = "tanh")
+    g <- nn(centr, eta.nn, nHidden = 3L, act = "tanh")
     d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
     centr ~ add(add.sd)
   })
@@ -119,7 +119,7 @@ nnModUde <- function() {
 nnModQsp <- function() {
   ini({ add.sd <- 0.3 })
   model({
-    g <- nn(centr, n_hidden = 3L, act = "tanh")
+    g <- nn(centr, nHidden = 3L, act = "tanh")
     d/dt(centr) <- -(1.0 / (1.0 + exp(-g))) * centr
     centr ~ add(add.sd)
   })
