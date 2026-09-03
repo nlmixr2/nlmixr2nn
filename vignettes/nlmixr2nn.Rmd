@@ -240,10 +240,15 @@ covariate curve with sharp wiggles in it, or per-subject variation that should
 have gone to the random effect. It does this silently: the fit converges, the
 objective looks fine, and only the learned shape gives it away.
 
-Two penalties are available for that. `l2` shrinks the weights; `smooth` charges
-for curvature specifically, penalizing the *second* derivative of the network
-along each input, which leaves a monotone slope free and pays only for the
-wiggles. Biases are never penalized, and neither is a latent eta's input column —
+Two penalties are available for that, and they express different preferences.
+`l2` is an L2-norm penalty on the weights — ridge regression, or weight decay in
+machine-learning terms — which charges a weight for being far from zero and so
+prefers the flattest network the data will allow. `smooth` is a roughness penalty
+in the spline sense: it charges for the *second* derivative of the network along
+each input, so a monotone slope is free and only the wiggles are paid for. Put
+plainly, `l2` asks the network to be small and `smooth` asks it to be smooth,
+which is usually what you want from a learned covariate relationship — a shape,
+not a straight line and not an interpolation of the noise. Biases are never penalized, and neither is a latent eta's input column —
 the eta reaches the model only through the network, so shrinking those weights
 would shrink the random effect itself.
 

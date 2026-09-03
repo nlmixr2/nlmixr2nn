@@ -79,8 +79,15 @@ endpoint, which is what you want.}
 \item{seed}{optional integer seed for torch weight initialization (ignored when
 the model already carries trained weights, which are used as the start).}
 
-\item{l2}{weight-decay strength.  Adds `l2 * sum(Weff^2)` over the weight
-  MATRICES to the objective the weight step minimizes; biases stay free, so the
+\item{l2}{strength of an L2 penalty on the network's weights -- the same idea
+  as ridge regression, and what machine learning calls weight decay.  The name
+  is the L2 norm: the penalty is the SUM OF SQUARED weights, so a weight costs
+  more the further it is from zero, and the fit prefers the flattest network
+  consistent with the data.  `l2` is how much that preference is worth relative
+  to fitting the observations; `0` expresses no preference at all.
+
+  Concretely it adds `l2 * sum(Weff^2)` over the weight MATRICES to the
+  objective the weight step minimizes.  Biases stay free, so the
   network can still move its output level without paying for it.  `Weff` is the
   effective weight -- the first layer is penalized on `scale * W1`, because
   input scaling is folded into `W1` (see `nnScale.R`) and raw `W1` therefore
@@ -101,7 +108,13 @@ the model already carries trained weights, which are used as the start).}
   with the unpenalized objective improving) -- and check what the network
   learned with [nnEval()], because real effects shrink alongside invented ones.}
 
-\item{smooth}{curvature (smoothness) penalty.  Adds `smooth * sum(C^2)` where
+\item{smooth}{strength of a curvature penalty -- a roughness penalty in the
+  spline sense, asking the network to be a SMOOTH function of its inputs rather
+  than a small one.  Where `l2` pulls the network toward flat, `smooth` pulls it
+  toward gently curved, which is usually what you want from a learned covariate
+  relationship: a shape, not a straight line and not an interpolation of noise.
+
+  Concretely it adds `smooth * sum(C^2)` where
   `C = f(x+h) - 2*f(x) + f(x-h)` is the second difference of the network along
   each input's marginal curve, that input swept over its observed range with
   the others held at their center.  Penalizing the SECOND derivative rather
