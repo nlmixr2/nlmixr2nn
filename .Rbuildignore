@@ -10,3 +10,5 @@
 ^docs$
 ^pkgdown$
 ^README\.Rmd$
+^\.github$
+^\.gitignore$

@@ -1,0 +1,97 @@
+# Workflow derived from https://github.com/r-lib/actions/tree/v2/examples
+# Need help debugging build failures? Start at https://github.com/r-lib/actions#where-to-find-help
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+name: pkgdown.yaml
+
+permissions: read-all
+
+jobs:
+  pkgdown:
+    runs-on: ubuntu-latest
+    # Only restrict concurrency for non-PR jobs
+    concurrency:
+      group: pkgdown-${{ github.event_name != 'pull_request' || github.run_id }}
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      # See R-CMD-check.yaml: libtorch stays out of the cached R library.
+      TORCH_HOME: ${{ runner.temp }}/torch
+      TORCH_INSTALL: 1
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          # Keep this list in step with R-CMD-check.yaml.  `local::.` is
+          # deliberately NOT here: it would build nlmixr2nn inside this step,
+          # before libtorch exists, and ./configure would fail.  The package is
+          # installed after the libtorch step instead -- and it must be
+          # installed, because build_site(install = FALSE) still library()s it.
+          cache-version: 1
+          extra-packages: |
+            any::pkgdown
+            nlmixr2/lbfgsb3c
+            nlmixr2/dparser-R
+            nlmixr2/n1qn1c
+            nlmixr2/lotri
+            nlmixr2/rxode2ll
+            nlmixr2/PreciseSums
+            nlmixr2/RcppTrust
+            nlmixr2/rxode2
+            nlmixr2/nlmixr2est
+          needs: website
+
+      - name: Cache libtorch
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/torch
+          key: libtorch-${{ runner.os }}-1
+
+      - name: Install libtorch
+        run: |
+          torch::install_torch()
+          stopifnot(torch::torch_is_installed())
+        shell: Rscript {0}
+
+      - name: Install nlmixr2nn
+        run: R CMD INSTALL --preclean .
+        shell: bash
+
+      # pkgdown downloads its JS assets (fuse.js, autocomplete.js, headroom, ...)
+      # from cdnjs into R_user_dir("pkgdown", "cache") on every cold run; caching
+      # them keeps a slow CDN from failing the build.
+      - name: Cache pkgdown assets
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/R/pkgdown
+          key: pkgdown-assets-${{ runner.os }}-${{ hashFiles('_pkgdown.yml') }}
+          restore-keys: pkgdown-assets-${{ runner.os }}-
+
+      - name: Build site
+        run: |
+          # R's 60s default download timeout is not enough for a slow cdnjs
+          options(timeout = max(600, getOption("timeout")))
+          pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)
+        shell: Rscript {0}
+
+      - name: Deploy to GitHub pages 🚀
+        if: github.event_name != 'pull_request'
+        uses: JamesIves/github-pages-deploy-action@v4.5.0
+        with:
+          clean: false
+          branch: gh-pages
+          folder: docs

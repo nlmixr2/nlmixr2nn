@@ -134,13 +134,19 @@ actually produces over the real dosing and time grid. It is the kinetic-energy
 or optimal-transport regularizer of Finlay et al. (2020): it asks the learned
 dynamics to reach the same data by pushing less hard.
 
-The lambda is a **fraction of the objective**, not an absolute amount:
-`kinetic = 0.05` means the term starts at 5% of the objective. An absolute
-lambda could not mean one thing across models, because the raw term's scale
-follows the network's output scale, which follows the model. The normalizer is
-`|objf| / mean(f^2)` at the starting weights, frozen once from the first
-objective the fit produces -- so the term is inert for that first evaluation and
-live afterwards, and a penalty is never applied at an unknown relative scale.
+The lambda is a **fraction of the objective**, but in a weaker sense than `l2`
+and `smooth`: `kinetic = 0.05` charges 5% of the objective per unit of
+`mean(f^2)`, rather than starting at exactly 5% of it. The objective side is
+normalized and the term side is not. The normalizer is `|objf|`, frozen once
+from the first objective the fit produces -- so the term is inert for that first
+evaluation and live afterwards, and a penalty is never applied at an unknown
+objective scale.
+
+Leaving the term side un-normalized is deliberate. `init = "ude"` starts the
+network near the zero function on purpose, so dividing by its own starting
+`mean(f^2)` would divide by something about four orders of magnitude too small,
+and the penalty would then dominate as soon as the network's output reached its
+real size -- measured, a penalty of 566 against an objective of 76.
 
 ```{r, eval = FALSE}
 nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(kinetic = 0.1))

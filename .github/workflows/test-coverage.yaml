@@ -1,0 +1,99 @@
+# Workflow derived from https://github.com/r-lib/actions/tree/v2/examples
+# Need help debugging build failures? Start at https://github.com/r-lib/actions#where-to-find-help
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+name: test-coverage.yaml
+
+permissions: read-all
+
+# Each run downloads (or restores) libtorch and builds the package, so never
+# leave a superseded run going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-coverage:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      # See R-CMD-check.yaml: libtorch stays out of the cached R library.
+      TORCH_HOME: ${{ runner.temp }}/torch
+      TORCH_INSTALL: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          # Keep this list in step with R-CMD-check.yaml.
+          cache-version: 1
+          extra-packages: |
+            any::covr
+            any::xml2
+            nlmixr2/lbfgsb3c
+            nlmixr2/dparser-R
+            nlmixr2/n1qn1c
+            nlmixr2/lotri
+            nlmixr2/rxode2ll
+            nlmixr2/PreciseSums
+            nlmixr2/RcppTrust
+            nlmixr2/rxode2
+            nlmixr2/nlmixr2est
+          needs: coverage
+
+      - name: Cache libtorch
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/torch
+          key: libtorch-${{ runner.os }}-1
+
+      - name: Install libtorch
+        # covr builds the package, so libtorch has to be here first -- see the
+        # same step in R-CMD-check.yaml.  Without it every torch-backed test
+        # would skip (skip_if_no_torch) and coverage would silently collapse.
+        run: |
+          torch::install_torch()
+          stopifnot(torch::torch_is_installed())
+        shell: Rscript {0}
+
+      - name: Test coverage
+        run: |
+          cov <- covr::package_coverage(
+            quiet = FALSE,
+            clean = FALSE,
+            install_path = file.path(normalizePath(Sys.getenv("RUNNER_TEMP"), winslash = "/"), "package")
+          )
+          print(cov)
+          covr::to_cobertura(cov)
+        shell: Rscript {0}
+
+      - uses: codecov/codecov-action@v5
+        with:
+          # Fail if error if not on PR, or if on PR and token is given
+          fail_ci_if_error: ${{ github.event_name != 'pull_request' || secrets.CODECOV_TOKEN }}
+          files: ./cobertura.xml
+          plugins: noop
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Show testthat output
+        if: always()
+        run: |
+          ## --------------------------------------------------------------------
+          find '${{ runner.temp }}/package' -name 'testthat.Rout*' -exec cat '{}' \; || true
+        shell: bash
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-test-failures
+          path: ${{ runner.temp }}/package

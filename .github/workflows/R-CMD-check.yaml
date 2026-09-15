@@ -1,0 +1,120 @@
+# Workflow derived from https://github.com/r-lib/actions/tree/v2/examples
+# Need help debugging build failures? Start at https://github.com/r-lib/actions#where-to-find-help
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+name: R-CMD-check.yaml
+
+permissions: read-all
+
+# Auto-cancel superseded in-progress runs for the same ref so stale runs don't
+# pile up and starve the runner pool.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  R-CMD-check:
+    runs-on: ${{ matrix.config.os }}
+
+    name: ${{ matrix.config.os }} (${{ matrix.config.r }})
+
+    # Windows is expected to fail until the link is proven -- see the row below.
+    continue-on-error: ${{ matrix.config.allowFailure || false }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          # ubuntu-release carries the vignette signal: it is the only row that
+          # RUNS the vignette fits.  Every other row sets NLMIXR2NN_VIGNETTE_FITS
+          # to false and still does a complete build + check -- install,
+          # examples, Rd and compiled-code checks all run, which is what those
+          # rows are here to catch.  They cannot afford the fits: the user
+          # vignette has six chunks that fit real FOCEi/bobyqa models, and
+          # `R CMD check` runs them TWICE (once in `R CMD build`, then again
+          # re-building vignette outputs).  That is the workload that gets a
+          # hosted runner reclaimed mid-job ("exit code 143").
+          - {os: macos-latest,   r: 'release', vignetteFits: 'false'}
+          # windows-latest is ALLOWED TO FAIL and is here as a signal, not a
+          # gate.  src/Makevars.win.in links -ltorch -ltorch_cpu -lc10 directly
+          # against the libtorch the R 'torch' package ships, which is built
+          # with MSVC, while Rtools compiles with MinGW g++: the C++ symbol
+          # mangling differs and there are no import libraries.  configure.win
+          # only checks that lib/torch.dll EXISTS, so it passes and the failure
+          # lands at link time.  Flip this to a gate once a Windows build is
+          # confirmed locally.
+          - {os: windows-latest, r: 'release', vignetteFits: 'false', allowFailure: true}
+          - {os: ubuntu-latest,  r: 'devel', http-user-agent: 'release', vignetteFits: 'false'}
+          - {os: ubuntu-latest,  r: 'oldrel-1', vignetteFits: 'false'}
+          - {os: ubuntu-latest,  r: 'release'}
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+      # Keep libtorch OUT of the R library.  torch installs into its own package
+      # directory by default, which setup-r-dependencies caches -- that is ~1-2GB
+      # per matrix entry against a 10GB per-repo cache limit, so it would evict
+      # every other cache (and can restore a half-written libtorch).  TORCH_HOME
+      # is read by torch::torch_install_path(), which is what ./configure asks.
+      TORCH_HOME: ${{ runner.temp }}/torch
+      # Covers any path that loads torch before the explicit install step.
+      TORCH_INSTALL: 1
+      # Only ubuntu-release runs the vignette fits; see the matrix comment.
+      NLMIXR2NN_VIGNETTE_FITS: ${{ matrix.config.vignetteFits || 'true' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          http-user-agent: ${{ matrix.config.http-user-agent }}
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          cache-version: 1
+          # rxode2 and nlmixr2est are taken from GitHub: nlmixr2nn needs the
+          # ui-assembly hooks and the forced-covariate change that are merged
+          # upstream but not yet released.  The rest of the chain is pinned the
+          # same way nlmixr2est pins it, so a source rxode2 build resolves.
+          extra-packages: |
+            any::rcmdcheck
+            nlmixr2/lbfgsb3c
+            nlmixr2/dparser-R
+            nlmixr2/n1qn1c
+            nlmixr2/lotri
+            nlmixr2/rxode2ll
+            nlmixr2/PreciseSums
+            nlmixr2/RcppTrust
+            nlmixr2/rxode2
+            nlmixr2/nlmixr2est
+          needs: check
+
+      - name: Cache libtorch
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/torch
+          key: libtorch-${{ runner.os }}-1
+
+      - name: Install libtorch
+        # nlmixr2nn LINKS libtorch, and ./configure looks for it, so the
+        # binaries must exist before R CMD build/INSTALL runs -- not merely
+        # before the tests.  Without this the build fails in configure with
+        # "libtorch itself does not appear to be installed".  install_torch() is
+        # a no-op when the cache above already restored it.  stopifnot() fails
+        # HERE rather than leaving a confusing configure abort later.
+        run: |
+          torch::install_torch()
+          stopifnot(torch::torch_is_installed())
+        shell: Rscript {0}
+
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          upload-snapshots: true
+          build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'

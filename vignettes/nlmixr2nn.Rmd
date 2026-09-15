@@ -16,7 +16,13 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 .hasRx    <- requireNamespace("rxode2", quietly = TRUE)
 .hasNn    <- .hasRx && requireNamespace("nlmixr2nn", quietly = TRUE)
 .hasEst   <- .hasNn && requireNamespace("nlmixr2est", quietly = TRUE)
-.hasTorch <- .hasEst &&
+## The fits below take minutes, and `R CMD check` runs them TWICE: once in
+## `R CMD build`, then again when it re-builds the vignette outputs.  CI sets
+## NLMIXR2NN_VIGNETTE_FITS=false on the platforms where that is a wall-clock
+## risk.  Unset means run them, so a local build still shows real output.
+.wantFits <- !identical(tolower(Sys.getenv("NLMIXR2NN_VIGNETTE_FITS", "true")),
+                        "false")
+.hasTorch <- .hasEst && .wantFits &&
   tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable", PACKAGE = "nlmixr2nn")),
            error = function(e) FALSE)
 ```
@@ -340,9 +346,13 @@ this one.
   message naming the reason, not fitted wrongly.
 - **Networks per model**: several; they are trained together, and `nnEval(net=)`
   selects between them.
-- **Estimators**: any standard one. `"focei"` and the variational methods
-  interleave network training with the population fit; SAEM and the
-  importance-sampling methods alternate instead.
+- **Estimators**: any standard one. `"focei"`, the Laplace/AGQ methods, the
+  importance-sampling methods (`"imp"`, `"impmap"`) and the variational methods
+  interleave network training with the population fit, because their outer
+  iteration genuinely resumes from where it left off. SAEM (`"saem"`,
+  `"fsaem"`), `"qrpem"` and the nonparametric methods (`"npag"`, `"npb"`)
+  alternate instead: SAEM's stochastic-approximation gain sequence restarts on
+  every call, so chopping it into pieces would not continue the chain.
 
 Network initialization is scaled to each input's magnitude, measured from the
 data, so a network reading a concentration of 0.02 and one reading an amount of
