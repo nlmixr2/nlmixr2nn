@@ -12,3 +12,4 @@ src/Makevars.win
 
 # local code-index artifacts (vexp)
 .vexp/
+docs

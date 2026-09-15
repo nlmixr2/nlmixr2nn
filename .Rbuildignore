@@ -6,3 +6,7 @@
 ^\.vexp$
 ^nlmixr2nn\.Rcheck$
 ^.*\.tar\.gz$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$
+^README\.Rmd$
