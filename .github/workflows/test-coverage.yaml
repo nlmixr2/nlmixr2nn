@@ -20,11 +20,15 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
-      # See R-CMD-check.yaml: libtorch stays out of the cached R library.
-      TORCH_HOME: ${{ runner.temp }}/torch
       TORCH_INSTALL: 1
+      # See R-CMD-check.yaml: TORCH_HOME cannot be set in a job-level `env:`
+      # block, because the `runner` context is unavailable there.
 
     steps:
+      - name: Point TORCH_HOME outside the R library
+        run: echo "TORCH_HOME=${{ runner.temp }}/torch" >> $GITHUB_ENV
+        shell: bash
+
       - uses: actions/checkout@v4
 
       - uses: r-lib/actions/setup-r@v2
@@ -43,10 +47,14 @@ jobs:
             nlmixr2/n1qn1c
             nlmixr2/lotri
             nlmixr2/rxode2ll
+            nlmixr2/rxode2lincmt
+            nlmixr2/rxode2
             nlmixr2/PreciseSums
             nlmixr2/RcppTrust
-            nlmixr2/rxode2
             nlmixr2/nlmixr2est
+            qs=?ignore
+            qs2=?source
+            stringfish=?source
           needs: coverage
 
       - name: Cache libtorch

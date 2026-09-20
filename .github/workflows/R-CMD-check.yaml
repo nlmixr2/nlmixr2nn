@@ -54,18 +54,24 @@ jobs:
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
-      # Keep libtorch OUT of the R library.  torch installs into its own package
-      # directory by default, which setup-r-dependencies caches -- that is ~1-2GB
-      # per matrix entry against a 10GB per-repo cache limit, so it would evict
-      # every other cache (and can restore a half-written libtorch).  TORCH_HOME
-      # is read by torch::torch_install_path(), which is what ./configure asks.
-      TORCH_HOME: ${{ runner.temp }}/torch
       # Covers any path that loads torch before the explicit install step.
       TORCH_INSTALL: 1
       # Only ubuntu-release runs the vignette fits; see the matrix comment.
       NLMIXR2NN_VIGNETTE_FITS: ${{ matrix.config.vignetteFits || 'true' }}
+      # NB: TORCH_HOME cannot be set here -- the `runner` context is not
+      # available in a job-level `env:` block, and using it rejects the whole
+      # workflow file before any step runs.  It is exported in the first step.
 
     steps:
+      - name: Point TORCH_HOME outside the R library
+        # torch installs libtorch into its own package directory by default,
+        # which setup-r-dependencies caches -- that is ~1-2GB per matrix entry
+        # against a 10GB per-repo cache limit, so it would evict every other
+        # cache (and can restore a half-written libtorch).  TORCH_HOME is what
+        # torch::torch_install_path() reports, which is what ./configure asks.
+        run: echo "TORCH_HOME=${{ runner.temp }}/torch" >> $GITHUB_ENV
+        shell: bash
+
       - uses: actions/checkout@v4
 
       - uses: r-lib/actions/setup-pandoc@v2
@@ -79,10 +85,9 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           cache-version: 1
-          # rxode2 and nlmixr2est are taken from GitHub: nlmixr2nn needs the
-          # ui-assembly hooks and the forced-covariate change that are merged
-          # upstream but not yet released.  The rest of the chain is pinned the
-          # same way nlmixr2est pins it, so a source rxode2 build resolves.
+          # Mirrors nlmixr2est's list, plus nlmixr2est itself: nlmixr2nn needs
+          # the ui-assembly hooks and the forced-covariate change that are
+          # merged upstream but not yet released.
           extra-packages: |
             any::rcmdcheck
             nlmixr2/lbfgsb3c
@@ -90,10 +95,13 @@ jobs:
             nlmixr2/n1qn1c
             nlmixr2/lotri
             nlmixr2/rxode2ll
+            nlmixr2/rxode2lincmt
+            nlmixr2/rxode2
             nlmixr2/PreciseSums
             nlmixr2/RcppTrust
-            nlmixr2/rxode2
             nlmixr2/nlmixr2est
+            qs=?ignore
+            rstan=?ignore
           needs: check
 
       - name: Cache libtorch

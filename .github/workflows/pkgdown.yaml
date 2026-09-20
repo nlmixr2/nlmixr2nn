@@ -20,12 +20,16 @@ jobs:
       group: pkgdown-${{ github.event_name != 'pull_request' || github.run_id }}
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
-      # See R-CMD-check.yaml: libtorch stays out of the cached R library.
-      TORCH_HOME: ${{ runner.temp }}/torch
       TORCH_INSTALL: 1
+      # See R-CMD-check.yaml: TORCH_HOME cannot be set in a job-level `env:`
+      # block, because the `runner` context is unavailable there.
     permissions:
       contents: write
     steps:
+      - name: Point TORCH_HOME outside the R library
+        run: echo "TORCH_HOME=${{ runner.temp }}/torch" >> $GITHUB_ENV
+        shell: bash
+
       - uses: actions/checkout@v4
 
       - uses: r-lib/actions/setup-pandoc@v2
@@ -37,22 +41,27 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           # Keep this list in step with R-CMD-check.yaml.  `local::.` is
-          # deliberately NOT here: it would build nlmixr2nn inside this step,
-          # before libtorch exists, and ./configure would fail.  The package is
-          # installed after the libtorch step instead -- and it must be
-          # installed, because build_site(install = FALSE) still library()s it.
+          # deliberately NOT here, though nlmixr2est has it: it would build
+          # nlmixr2nn inside this step, before libtorch exists, and ./configure
+          # would fail.  The package is installed after the libtorch step
+          # instead -- and it must be installed, because
+          # build_site(install = FALSE) still library()s it.
           cache-version: 1
           extra-packages: |
             any::pkgdown
+            nlmixr2/n1qn1c
             nlmixr2/lbfgsb3c
             nlmixr2/dparser-R
-            nlmixr2/n1qn1c
             nlmixr2/lotri
             nlmixr2/rxode2ll
+            nlmixr2/rxode2lincmt
+            nlmixr2/rxode2
             nlmixr2/PreciseSums
             nlmixr2/RcppTrust
-            nlmixr2/rxode2
             nlmixr2/nlmixr2est
+            qs=?ignore
+            qs2=?source
+            stringfish=?source
           needs: website
 
       - name: Cache libtorch
