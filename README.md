@@ -4,6 +4,10 @@
 # nlmixr2nn <img src="man/figures/logo.png" align="right" height="138" alt="" />
 
 <!-- badges: start -->
+
+[![R-CMD-check](https://github.com/nlmixr2/nlmixr2nn/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/nlmixr2/nlmixr2nn/actions/workflows/R-CMD-check.yaml)
+[![Codecov test
+coverage](https://codecov.io/gh/nlmixr2/nlmixr2nn/graph/badge.svg)](https://app.codecov.io/gh/nlmixr2/nlmixr2nn)
 <!-- badges: end -->
 
 `nlmixr2nn` puts neural networks inside `rxode2` and `nlmixr2` models.
