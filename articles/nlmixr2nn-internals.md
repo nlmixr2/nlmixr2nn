@@ -1,0 +1,389 @@
+# Inside nlmixr2nn
+
+This is for people changing `nlmixr2nn`, not people using it. For the
+latter, see
+[`vignette("nlmixr2nn")`](https://nlmixr2.github.io/nlmixr2nn/articles/nlmixr2nn.md).
+
+Most of what follows is one idea repeated: **a neural network inside an
+ODE has to be plumbed through machinery that was not built for it, and
+almost every way of getting that plumbing wrong produces a wrong number
+rather than an error.** Four separate bugs of exactly that shape have
+been fixed here. Each trained, converged, and passed the whole test
+suite while computing something other than what it claimed. The
+invariants below are the ones that turned out to matter, and each is
+named with the failure it prevents.
+
+## The shape of it
+
+    nn() at parse time                          R/nnUdf.R, R/nnInit.R
+      |  draws weights with R's RNG, emits nn<K>(id, ...)
+      v
+    .nnAdopt() at model assembly                R/nnAdopt.R
+      |  weights -> rxForcedPars, shapes -> sticky nnMeta
+      v
+    solve            .nnRehydrate() binds the C registry, per solve
+      or
+    fit              .nnRun() owns the registry for the duration
+                       |- augmented model built                R/nnEst.R
+                       |- inner fit (estimator's own model)
+                       |- cotangent captured                   src/nlmixr2nnContrib.c
+                       |- weight gradient assembled + torch step
+                       v
+                     trained weights -> rxForcedPars on the fit's ui
+
+## Parse time: where the weights come from
+
+[`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md) is an
+[`rxode2::rxUdfUi()`](https://nlmixr2.github.io/rxode2/reference/rxUdfUi.html)
+user-defined function. It expands to a compiled call and a declaration
+of the weights:
+
+``` r
+
+library(nlmixr2nn)
+mod <- function() {
+  model({
+    d/dt(centr) <- -nn(centr, nHidden = 3) * centr
+  })
+}
+rxode2::rxSetSeed(1)
+ui <- rxode2::rxode2(mod)
+#> ℹ parameter labels from comments are typically ignored in non-interactive mode
+#> ℹ Need to run with the source intact to parse comments
+cat(paste(ui$lstChr, collapse = "\n"))
+#> rx_nnw0_ <- rxnnW1_0_1_1 + rxnnW1_0_2_1 + rxnnW1_0_3_1 + rxnnB1_0_1 + rxnnB1_0_2 + rxnnB1_0_3 + rxnnW2_0_1 + rxnnW2_0_2 + rxnnW2_0_3 + rxnnB2_0
+#> d/dt(centr) <- -nn1(0, centr) * centr
+```
+
+Two decisions are visible there.
+
+**The weights are covariates, not `param()` thetas.** Thetas get
+theta-expanded and mangled during FOCEi model assembly, and they enter
+mu-referencing. Covariates are contiguous in `par_ptr`, do neither, and
+can be supplied by the model rather than the data. The dummy `rx_nnw0_`
+line exists only so rxode2’s covariate detection sees the names.
+
+**The weights are drawn when the model is parsed**, with R’s RNG, in
+`R/nnInit.R`, drawn with rxode2’s threefry generator (`rxnorm`/`rxunif`)
+inside `rxWithSeed()`, which restores both the R stream and the rxode2
+seed. So `rxSetSeed()` reproduces a network – and does so under threads,
+which R’s RNG cannot promise – and a parsed model is solvable
+immediately without libtorch. torch is loaded *from* these values rather
+than generating its own, which is what makes a whole fit reproducible
+under a single seed.
+
+The draw is isolated: building a model does not advance the caller’s
+stream. Adding a network to a model must not shift the draws in the rest
+of someone’s script.
+
+### Getting a value out of a UDF
+
+`rxUdfUi()` can return only `replace`, `before`, `after`, `iniDf`,
+`uiUseData` and `uiUseMv` — code, never a value. And once a ui is
+compressed, `rxUiDecompress()` returns a *fresh environment on every
+call*, so an in-place assignment made after assembly is invisible to
+whoever holds the model.
+
+That is why `rxRegisterUiAssembled()` exists (added to rxode2 for this):
+`.nnAdopt()` runs while the ui is still a mutable environment, and moves
+the drawn weights onto it as `rxForcedPars` plus a sticky `nnMeta`.
+
+> **Not `uiUseData`.** It is tempting to think a UDF could see the
+> dataset at fit time via `uiUseData = TRUE` and scale its inputs
+> accordingly. It cannot: that re-parse operates on the
+> *already-expanded* model text, where `nn(centr)` has become
+> `nn1(0, centr)`, so the UDF never runs again. Verified with a probe
+> UDF.
+
+## The weight-block offset: the sharpest edge here
+
+The compiled evaluator reads its weights from a contiguous block of the
+solve parameter vector, starting at an offset registered beforehand with
+[`nnSetMeta()`](https://nlmixr2.github.io/nlmixr2nn/reference/nnSetMeta.md).
+
+**Every model in the pipeline puts that block somewhere different.** For
+one model:
+
+    base ui             weights at 1..13   (base 0)
+    saemModel           weights at 2..14   (base 1)
+    foceiModel$inner    weights at 3..15   (base 2)
+    augmented model     different again
+
+Registering the wrong one **does not fail**. The evaluator reads a
+different stretch of the parameter vector and computes a different
+network, and the training loop then optimizes *that* —
+self-consistently, and wrongly. The symptom, when it was finally
+measured, was a fit whose own `g` differed from the network at its
+trained weights by more than the entire range of `g`.
+
+So:
+
+> **Invariant.** The offset must be resolved against the model that is
+> *actually about to be solved* — never reconstructed from a guess at
+> the layout.
+
+`.nnEstSolveParams(ui, est)` answers this per estimator, and
+`.nnSetNetBases()` applies it. The FOCEi posthoc that non-FOCEi
+estimators use to capture their cotangents is itself a FOCEi fit, so it
+needs FOCEi’s offset for its duration and the round’s restored
+afterwards.
+
+For an ordinary solve this is handled by the ui-prep hook, which
+receives the solve model — the reason rxode2’s `rxRegisterUiPrep()`
+gained a second argument.
+
+## Cotangent capture
+
+`src/nlmixr2nnContrib.c` registers a bundle with nlmixr2est whose
+per-observation hook records `d(LL)/d(f)` — the exact score for whatever
+residual model the user wrote. Two constraints, both learned the hard
+way.
+
+> **The hook runs inside nlmixr2est’s OpenMP region.** It must not
+> allocate, must not call into R, and must not resize anything. It used
+> to grow its own store with `R_chk_realloc()` from a worker thread;
+> that is a data race on the buffer, a use-after-free for every other
+> thread mid-write, and an R API call off the main thread. It segfaulted
+> as soon as the path was genuinely exercised.
+
+The store is now sized once from R, before the fit, from the subject
+count and the maximum observations per subject. The hook only writes,
+and distinct `(id, k)` land in distinct slots. The flat index is
+`id * stride + k`, and the **same stride must be used on both sides** —
+it was once a `1024` literal in C and in three places in R, which
+silently dropped any subject with more.
+
+> **The reported score is on the TRANSFORMED scale.**
+> Transform-both-sides is applied in rxode2’s `rx_pred_` statement, so
+> by the time the hook sees `f`, it is already transformed. The
+> augmented solve’s sensitivities are on the natural scale. Chaining
+> them without the transformation’s own derivative leaves the gradient
+> short by that factor at every observation.
+
+`R/nnEndpoint.R` supplies that derivative for every level in rxode2’s
+table. Note that a combined level is a *composition*:
+`"logit + yeoJohnson"` is `yeoJohnson(logit(y))`, so the outer
+derivative is evaluated at `logit(y)`, not at `y`. Multiplying two
+derivatives both taken at `y` is the plausible-looking wrong answer.
+
+### Which score is used, and why
+
+| endpoint                        | score                         |
+|---------------------------------|-------------------------------|
+| untransformed, `add()`/`prop()` | closed-form Gaussian          |
+| anything else                   | exact, captured from the hook |
+
+This is a decision, not a stopgap, and it is worth not re-litigating.
+The exact score is evaluated at the *inner fit’s* prediction while the
+sensitivities it multiplies come from the *augmented* solve, and those
+two differ by ~4.5e-04 at identical EBEs. The closed form takes both
+from the same solve, so where it applies it is the more self-consistent
+of the two. The exact score earns its place on the endpoints the closed
+form cannot express.
+
+When capture fails, falling back to the closed form is only permitted
+where the closed form is genuinely that endpoint’s score —
+`.nnCanUseClosedForm()`. Otherwise it errors, because a silent fallback
+on a transformed endpoint trains on the wrong gradient.
+
+## Model augmentation
+
+[`nnAugmentModel()`](https://nlmixr2.github.io/nlmixr2nn/reference/nnAugmentModel.md)
+builds the forward-sensitivity model: for each weight `w_j`, a
+variational state per model state,
+
+    d/dt(s_ij) = sum_k F_X[i,k] s_kj + (dR_i/dg)(dg/dw_j)
+
+where `F_X` is the model Jacobian (rxode2 forms it, chaining the
+registered `nn<K>_d*` input derivatives), `rx_drdg_<state>_` is emitted
+here, and `dg/dw_j` comes from the plain-C `nnWeightGrad` at solve time.
+The prediction’s sensitivity is chained through the states as
+`rx_predsw_j = sum_s d(pred)/d(s) * rx_sw_s`.
+
+This costs **one extra ODE state per weight per model state**, which is
+the current ceiling on network size.
+
+Augmentation does not perturb the base trajectory — measured at ~5e-09
+relative, which matters because the closed-form score is computed from
+the augmented solve.
+
+``` r
+
+## the augmented text for a two-state model, for inspection
+cat(nlmixr2nn:::nnAugmentModel(
+  "g = nn1(0, centr)\nd/dt(centr) = -g*centr\nd/dt(peri) = g*centr - k*peri",
+  H = 1L))
+```
+
+## The training backend
+
+The modules live in C++ so compiled solve code reaches them without an R
+callback. The backend is the *optimizer and the weight container*, not
+the autodiff: the in-solve `dg/dw` uses the plain-C `nnWeightGrad`,
+which is thread-safe and keeps the backend out of the ODE hot loop.
+[`nnTorchSetGrad()`](https://nlmixr2.github.io/nlmixr2nn/reference/nnTorchSetGrad.md) +
+[`nnTorchStep()`](https://nlmixr2.github.io/nlmixr2nn/reference/nnTorchStep.md)
+inject an externally computed gradient and take an Adam/SGD step.
+
+Because that is all a fit asks of it, the backend is interchangeable,
+and `./configure` picks one at install time:
+
+|  | `src/nnTorch.cpp` | `src/nnBuiltin.cpp` |
+|----|----|----|
+| selected when | the ‘torch’ package has its libtorch binaries | otherwise, and by default on Windows |
+| optimizer | libtorch’s Adam/SGD | the same Adam/SGD, written out |
+| autograd | real | the analytic VJP, from `nnWeightGradWC` |
+
+`_nlmixr2nn_nnBackend()` reports which one is compiled in; only one ever
+is. The fallback is why the package installs where libtorch cannot be
+linked – Windows, where torch’s libtorch is MSVC-built and Rtools is
+MinGW, and CRAN, which will not fetch a 2GB library at build time.
+
+The analytic weight gradient is checked against torch autograd across
+every activation and input dimension, which is what licenses using the C
+path. That check needs a libtorch build to mean anything – under the
+builtin backend both sides of it are the same routine – so
+`test-nn-wgrad.R` skips unless libtorch is linked, and CI keeps one row
+that links it.
+
+## Persistence
+
+A fitted model carries its trained weights in `rxForcedPars()` and its
+shapes in a sticky `nnMeta`, so it reloads in a fresh session with no
+external state. The transient C registry is rebuilt by the ui-prep hook,
+resolving the offset by name against the solve model.
+
+A model that carries its own weights is **self-describing, and wins over
+the loader**: in a fresh session the loader buffer is empty, so letting
+it override would silently zero the network. During training that is
+inverted — the loop owns the weights and injects them every round.
+
+## Things that look safe and are not
+
+A short list, each of which cost real time:
+
+- **Unexporting the generated `nn<K>` family.** Compiled model code
+  reaches them through `R_RegisterCCallable()`, so it looks internal.
+  But rxode2’s symengine renderer resolves a model function *by name
+  over the search path* when it builds derivatives, so an unexported
+  `nn1` breaks every Jacobian. `nnWg<K>` is genuinely internal because
+  it only ever appears in generated text handed to C.
+- **Testing with `env = new.env(parent = asNamespace())`.** Package
+  internals are visible there and not to a user, which hid the above
+  completely. `test-nn-userenv.R` runs in a child of
+  [`globalenv()`](https://rdrr.io/r/base/environment.html) and in a
+  `callr` subprocess for exactly this reason.
+- **Reading `rxForcedPars` as “supplied”.** It is applied when gpars are
+  written, *after* parameter resolution has decided whether every
+  parameter has a source. rxode2 gained an explicit change so a forced
+  parameter counts as supplied.
+- **A tryCatch around an unexported call.** `nlmixr2est::nlmSolveR` does
+  not exist (it is internal); the error was swallowed by a `tryCatch`
+  returning `NA`, so an entire code path silently never ran.
+- **The two weight-gradient sites are on different objective scales.**
+  `R/nnWeightStep.R` hands torch a gradient of $`-\log L`$;
+  `R/nnPopFit.R` optimizes $`-2\log L`$. The weight penalty (below) is
+  defined on the $`-2\log L`$ scale, so adding the same vector at both
+  would make one `l2` mean two different things inside a single fit,
+  with nothing in the output to say so. `.nnAddPen(g, w, pen, scale)`
+  takes the scale explicitly and `test-nn-penalty.R` asserts the
+  invariant
+  `2 * .nnAddPen(g, w, pen, 1L) == .nnAddPen(2 * g, w, pen, 2L)`.
+- **Plain `sum(W1^2)` is not L2 here.** Input scaling is folded into the
+  first-layer weights and then discarded (`.nnRescaleW1`), so an input
+  of typical magnitude 500 carries a `W1` column ~500x smaller at equal
+  functional effect. A naive weight-decay term would penalize it 250000x
+  less. The penalty is on the *effective* weight `s_k * W1[j,k]`, which
+  is why the spec carries the input scales.
+- **`nnWeightGrad` outside a solve returns zeros, not an error.** It
+  reads the live solve’s `par_ptr`. Anything evaluating a network
+  outside a solve — the curvature penalty,
+  [`nnEval()`](https://nlmixr2.github.io/nlmixr2nn/reference/nnEval.md)
+  — must use the explicit-weight entry points `_nlmixr2nn_nnForwardW` /
+  `_nlmixr2nn_nnWeightGradW`. Using the registry form would make the
+  whole penalty vanish silently.
+
+## The weight penalty
+
+`R/nnPenalty.R`. Two terms, both opt-in (`nnControl(l2 = , smooth = )`,
+both `0` by default):
+
+``` math
+P = -2\log L + \lambda_{2}\sum W_{\text{eff}}^2 + \lambda_{s}\sum C^2
+```
+
+`C` is the second difference of the network along one input’s marginal
+curve, that input swept over its observed 10th-90th percentile with the
+others pinned at their center. Sweeping each input’s *own* range is what
+makes `smooth` scale-free without extra normalization:
+$`C = h^2 f''(x)`$ and $`h`$ is proportional to the input’s spread, so
+`C` is curvature with respect to the standardized input.
+
+Inputs with no resolvable range — a latent eta, whose EBEs move every
+round, or a compound expression such as `nn(centr/Vc)` — are held fixed
+rather than swept.
+
+The gradient reuses the analytic weight Jacobian:
+$`\partial C/\partial w = J(x_{i+1}) - 2J(x_i) + J(x_{i-1})`$, so there
+is no new autodiff and no new C code.
+
+`nnControl(l2 = 0, smooth = 0)` is a strict no-op: the spec is `NULL`,
+the gradient vector is returned untouched, and the fit is bit-identical
+to an unregularized one.
+
+### Lambda is a fraction, not an amount
+
+Each term carries a normalizer, frozen at the first evaluation that
+knows an objective (the population pre-fit’s own objective, or the first
+inner fit in the round loop):
+
+``` math
+k_W = \frac{|\text{objf}|}{\sum W_{\text{eff}}^2}, \qquad
+  k_C = \frac{|\text{objf}|}{\sum C^2}
+```
+
+so that each term *starts* at exactly $`\lambda`$ times the objective.
+They are frozen rather than recomputed, so $`P`$ stays a fixed objective
+a gradient can descend rather than a moving target; until they are known
+the penalty is inactive and contributes exactly zero.
+
+The two terms are normalized **separately** because their raw scales
+differ by orders of magnitude — measured at ~180× — so one shared
+normalizer would leave the mix between them as arbitrary as the
+magnitude was.
+
+This is not cosmetic. Under the earlier absolute penalty the E5.5 smoke
+matrix broke at `l2 = 0.1` (the `saem`/`lnorm` cell’s RMSE rose instead
+of falling) while visible shrinkage on an over-fitting fit needed
+`l2 = 1` — the safe range and the effective range did not overlap. After
+normalizing, the whole matrix passes to `l2 = 0.3` and the
+objective-optimal value is `0.05`.
+
+## Extending
+
+- **An activation**: `.nnActCode` (R), `nnAct`/`nnActD`/`nnActD2` in
+  `src/nnEval.c`, and `MLPImpl` in `src/nnTorch.cpp`. The three must
+  agree; `test-nn-wgrad.R` and `test-nn-general.R` check that they do.
+- **More inputs than 4**: regenerate `R/nnGen.R` with `tools/genNn.R`
+  and raise `NN_KMAX`.
+- **Another estimator**: teach `.nnEstSolveParams()` which model it
+  solves, and `.nnInterleaveKnob()`/`.nnNonResuming` whether its partial
+  fit resumes.
+- **Depth**: `.nnInitDraw()` and the weight layout already take `H` as a
+  vector; the compiled evaluators do not.
+  [`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md) refuses
+  a vector `nHidden` explicitly so that boundary is visible.
+
+## Where to look when something is wrong
+
+The tests are organised around the invariants rather than the functions:
+
+| file | what it pins |
+|----|----|
+| `test-nn-consistency.R` | the network evaluated == the network the weights describe |
+| `test-nn-reproducible.R` | a fit is reproducible under a fixed seed |
+| `test-nn-userenv.R` | it works with only the package attached |
+| `test-nn-endpoint.R` | the transformation derivative, vs rxode2’s own transform |
+| `test-nn-llgrad.R` | the assembled gradient, vs a finite difference of the likelihood |
+| `test-nn-cotangent-agree.R` | the two score sources, compared at the gradient |
+| `test-nn-zeroboiler.R` | no helper call is ever required |

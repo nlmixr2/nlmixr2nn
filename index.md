@@ -1,0 +1,186 @@
+# nlmixr2nn
+
+`nlmixr2nn` puts neural networks inside `rxode2` and `nlmixr2` models.
+You write [`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md)
+where you would write any other term: in an ODE right-hand side, in a
+parameter, or around a covariate. Everything after that is a normal
+`rxode2`/`nlmixr2` workflow. The model solves as soon as it is parsed,
+`nlmixr2()` fits it, `rxSolve()` simulates from the fit, and a saved fit
+reloads with its trained weights.
+
+The main use is the **universal differential equation** (UDE). You keep
+the mechanism you trust and let a small network learn the part you do
+not know, such as an elimination process, a covariate relationship, or a
+term in a systems-pharmacology model.
+
+## A first model
+
+``` r
+
+library(nlmixr2)
+library(nlmixr2nn)
+
+ude <- function() {
+  ini({
+    add.sd <- 0.3
+    eta.nn ~ 0.2
+  })
+  model({
+    ## a 3-unit network of the amount and a latent random effect
+    g <- nn(centr, eta.nn, nHidden = 3, act = "tanh")
+    d/dt(centr) <- -(1 / (1 + exp(-g))) * centr   # a bounded learned rate
+    centr ~ add(add.sd)
+  })
+}
+
+fit <- nlmixr2(ude, data, "focei")
+```
+
+That is the whole call. There is no setup step, no `nn=` argument is
+needed, and the data is not modified. The result is an ordinary
+`nlmixr2` fit. `eta.nn` enters the network as an input, so it captures
+between-subject variation in the learned term just as any other eta
+would.
+
+To see what the network learned, evaluate it directly:
+
+``` r
+
+e <- nnEval(fit, centr = seq(0.5, 10, length.out = 25), eta.nn = 0)
+plot(e)
+```
+
+## Why it is built this way
+
+- **The network is opaque.** Each
+  [`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md) becomes
+  one compiled call, so the model text stays the same size however large
+  the network is. The network’s value and its exact input derivatives
+  come from thread-safe C. That supports larger networks than writing
+  out every weight as model code, and the derivatives make a random
+  effect passed *into* a network identifiable.
+- **Weights live on the model.** They are drawn when the model is
+  parsed, using `rxode2`’s threefry generator.
+  [`rxode2::rxSetSeed()`](https://nlmixr2.github.io/rxode2/reference/rxSetSeed.html)
+  reproduces a network exactly, and drawing weights does not change the
+  R or `rxode2` random streams. An untrained model can be simulated
+  right away.
+- **Gradients are exact.** Weight gradients come from forward
+  sensitivities, the same variational approach FOCEi uses for its eta
+  sensitivities, carried in an augmented solve. The weights are trained
+  together with, or in turns with, the population fit.
+- **The objective stays comparable.** Penalties are added only to the
+  objective the weights are trained on. The reported `objf`, AIC and BIC
+  are the unpenalized likelihood, so a network model can be compared
+  directly with an analytic one.
+
+## What you can do with it
+
+**Learn a covariate relationship.** Pass covariates as inputs. The
+network learns how they affect a parameter, and the latent eta carries
+the variation they do not explain.
+
+``` r
+
+model({
+  CL <- exp(tCL + nn(WT, EGFR, eta.nn))
+  ...
+})
+```
+
+**Fit a model with no random effects.** Systems-pharmacology models
+often have no between-subject variability. Fit them with a population
+optimizer such as `"bobyqa"`, `"nlminb"` or `"lbfgsb3c"`. These fits
+currently need an untransformed `add()` or `prop()` endpoint.
+
+``` r
+
+qspFit <- nlmixr2(qsp, data, "bobyqa")
+```
+
+**Save, reload and refit.** A fit is self-contained:
+[`saveRDS()`](https://rdrr.io/r/base/readRDS.html) and
+[`readRDS()`](https://rdrr.io/r/base/readRDS.html), or even saving it
+with `nlmixr2save` will allow it to be restored in a fresh session.
+Passing a fit back to `nlmixr2()` resumes from its trained weights.
+
+**Steer training when you need to.** The training schedule is inferred
+from the model, the data and the estimator.
+[`nnControl()`](https://nlmixr2.github.io/nlmixr2nn/reference/nnControl.md)
+overrides any part of it and leaves the rest inferred.
+
+``` r
+
+nlmixr2(ude, data, "focei", nn = nnControl(rounds = 400, lr = 0.01))
+```
+
+Three penalties are available, and all are off by default. `l2` shrinks
+the weights, `smooth` penalizes curvature, and `kinetic` penalizes how
+hard the network pushes along the solved trajectory. `l2` and `smooth`
+are set as fractions of the objective, so a given value means about the
+same thing across models. `kinetic` is scaled by the objective too, in a
+looser sense. Unlike the other two, it changes the learned dynamics
+rather than only the optimizer path.
+
+## What is supported
+
+|  |  |
+|----|----|
+| Inputs | 1 to 4 per network: states, covariates, or a latent eta |
+| Activations | `"softplus"` (default), `"tanh"`, `"relu"`, `"gelu"`, `"silu"` |
+| Architecture | one hidden layer of width `nHidden`; several networks per model |
+| Endpoints | one, with any normal residual model (`add()`, `prop()`, combined, `lnorm()`, …), `pois()` or `binom()`; population-only optimizers accept only untransformed `add()`/`prop()` |
+| Estimators | FOCEi, Laplace/AGQ, importance sampling and the variational methods train the network alongside the population fit; SAEM, QRPEM and the nonparametric methods alternate with it; population-only optimizers suit models without random effects |
+
+Unsupported cases, such as another distribution or a population-only
+optimizer on a model with random effects, stop with an error that
+explains why.
+
+## Installation
+
+`nlmixr2nn` needs the development versions of `rxode2` and `nlmixr2est`:
+
+``` r
+
+# install.packages("pak")
+pak::pak(c("nlmixr2/rxode2", "nlmixr2/nlmixr2est", "nlmixr2/nlmixr2nn",
+           "nlmixr2"))
+```
+
+There is nothing else to install. Training uses a self-contained
+Adam/SGD optimizer built into the package.
+
+If the `torch` package and its libtorch binaries are present when
+nlmixr2nn is installed, libtorch is linked as the training backend
+instead. Given the same starting weights the two take the same optimizer
+steps, because a fit feeds the optimizer the analytic gradient from the
+ODE forward sensitivity either way, and both implement the same Adam and
+SGD. A model carries its own weights from
+[`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md), so that
+is the normal case; the backends differ only in what an un-seeded
+network starts from when there are no weights to load. libtorch also
+gives the test suite a second, independent implementation to check the
+gradients against.
+
+``` r
+
+install.packages("torch")
+torch::install_torch()        # then re-install nlmixr2nn to link it
+```
+
+`nlmixr2nn:::.nnBackend()` reports which one a build is using.
+
+Population-only fits also need the optimizer’s own package, for example
+`minqa` for `"bobyqa"` or `lbfgsb3c` for `"lbfgsb3c"`.
+
+## Learn more
+
+- [`vignette("nlmixr2nn")`](https://nlmixr2.github.io/nlmixr2nn/articles/nlmixr2nn.md):
+  worked UDE, covariate and no-random-effect fits, training control and
+  regularization.
+- [`vignette("nlmixr2nn-node")`](https://nlmixr2.github.io/nlmixr2nn/articles/nlmixr2nn-node.md):
+  how the package relates to the neural-ODE literature. It covers why it
+  uses forward sensitivities rather than the adjoint, why width is
+  preferred over depth, the kinetic penalty, and augmentation.
+- [`vignette("nlmixr2nn-internals")`](https://nlmixr2.github.io/nlmixr2nn/articles/nlmixr2nn-internals.md):
+  how the package works inside, for contributors.

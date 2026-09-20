@@ -1,0 +1,328 @@
+# Neural ODEs and nlmixr2nn: what carries over
+
+[`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md) puts a
+neural network inside an ODE, which is what the neural-ODE (NODE)
+literature is about. That literature is written for a different problem,
+though, and the differences decide which of its results apply here and
+which do not. This vignette is for readers who know that literature and
+want to know what carried over.
+
+The comparison throughout is against Worsham and Kalita (2025) and its
+reference implementation, which is the most complete practical survey of
+the area: solvers, differentiation modes, augmentation and
+regularization, each with measured experiments.
+
+## The problem is not the same one
+
+In the NODE literature the network **is** the dynamics:
+`dx/dt = f(x; w)`, with `f` a 32x32 multilayer perceptron, fitted to
+trajectories that are dense, cheap and usually noise-free. A single
+trajectory is one training example and the loss is often evaluated only
+at its endpoint.
+
+Here the network is a **term inside** a model that is mostly known:
+
+``` r
+
+d/dt(centr) <- -(1 / (1 + exp(-nn(centr, eta.nn)))) * centr
+```
+
+That is a universal differential equation (UDE): the mechanism you trust
+stays, and a small network absorbs the part you do not. Four differences
+follow, and they drive everything below.
+
+- **Data is sparse.** Eight observations per subject, tens of subjects,
+  with real residual error. A 32x32 network has more parameters than the
+  study has observations.
+- **Every observation is an output.** The loss is not a terminal
+  condition; it accumulates at every measured time.
+- **Individual gradients matter.** The population fit needs per-subject
+  quantities, not just a summed gradient.
+- **The likelihood is the objective.** Not mean squared error – a
+  residual model, random effects and an objective function value that
+  has to stay comparable to a model fitted without a network.
+
+## Sensitivities: forward, not adjoint
+
+The adjoint method is the headline result of Chen et al. (2018): solve
+one augmented system backwards in time and get the gradient with respect
+to every parameter at a cost independent of how many parameters there
+are.
+
+`nlmixr2nn` does not use it. The weight gradient comes from **forward
+sensitivities** – `nnAugment.R` adds one variational state per (state x
+weight) to the solve, so `d(state)/d(w)` is integrated alongside the
+states themselves.
+
+That is a deliberate choice, for three reasons in decreasing order of
+weight:
+
+1.  **The adjoint’s win condition does not hold.** It pays when outputs
+    are far fewer than parameters – ideally one scalar loss. With an
+    observation at every measured time, a backward sweep must be
+    re-seeded at each one, and it returns only the reduced sum-gradient.
+    One forward pass returns every observation’s sensitivity to every
+    weight.
+2.  **Forward sensitivities are already being computed.** FOCEi needs
+    `d(pred)/d(eta)`, which is a forward variational solve using the
+    same model Jacobian `F_X`. Adding weight columns reuses it. An
+    adjoint would be a second, parallel, backward machinery sharing none
+    of that work.
+3.  **The measurements do not favour it.** In Worsham and Kalita’s own
+    pendulum experiments – on a terminal-only loss, the setup most
+    favourable to the adjoint – it was slightly slower than direct
+    differentiation and no more accurate.
+
+This is not a statement that adjoints are unavailable in this ecosystem.
+`rxode2` implements exact discrete adjoint sensitivities, including
+stiff methods and steady-state dosing, aimed at the **THETA** gradient
+in `nlm`/`focei` – where the objective really is one scalar and the
+parameters really are many. That is the case the adjoint was built for.
+A network’s weight gradient is not.
+
+### What that costs, and what follows from it
+
+The forward path’s cost is `O(nStates x nWeights)`, and since it is not
+going away, it is a design constraint rather than a temporary limit. Two
+consequences are worth stating plainly, because they run against the
+literature’s defaults.
+
+**Prefer width to depth.** A single hidden layer of width `H` with `K`
+inputs is `H*K + 2H + 1` weights; a second layer adds a quadratic
+`H1*H2` block:
+
+| network (K = 2) | weights, and so variational states per model state |
+|----|----|
+| `n_hidden = 5` (the default) | 21 |
+| `n_hidden = 32`, one layer | 129 |
+| `n_hidden = c(16, 16)` | 337 |
+
+Roughly the same capacity, 2.6x the sensitivity cost for the two-layer
+version. [`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md)
+accepts a single hidden layer for this reason, and rejects a vector
+`n_hidden` at the user boundary rather than deeper down, so depth
+remains an additive change if the trade ever becomes worth making.
+
+**Prefer small networks generally.** With eight observations per
+subject, the 32x32 default of the NODE literature is not a network this
+data can support – the constraint and the statistics point the same way
+for once.
+
+## Regularization
+
+Three penalties are available, and they act in different spaces. All
+three shape the optimization only: the reported `objf`, and so AIC and
+BIC, stays the unpenalized -2 log-likelihood, so a regularized network
+model is still directly comparable to one with an analytic covariate
+relationship.
+
+| penalty | acts on | where it is measured | default |
+|----|----|----|----|
+| `l2` | weight magnitude | the weights themselves | 0 (off) |
+| `smooth` | curvature | a synthetic partial-dependence grid | 0 (off) |
+| `kinetic` | how hard the network pushes | the realized trajectory | 0 (off) |
+
+All three are off by default, which is measured rather than cautious: in
+these models the network *is* the model, so a penalty large enough to
+suppress structure the data does not support also attenuates structure
+it does.
+
+`l2` and `smooth` are described in the main vignette. `kinetic` comes
+from this literature and is the one worth explaining here.
+
+### The kinetic term
+
+`kinetic` charges for `mean(f^2)`, where `f` is the network’s output at
+the **jointly realized input rows** of a trial solve – the trajectory
+the model actually produces over the real dosing and time grid. It is
+the kinetic-energy or optimal-transport regularizer of Finlay et
+al. (2020): it asks the learned dynamics to reach the same data by
+pushing less hard.
+
+The lambda is a **fraction of the objective**, but in a weaker sense
+than `l2` and `smooth`: `kinetic = 0.05` charges 5% of the objective per
+unit of `mean(f^2)`, rather than starting at exactly 5% of it. The
+objective side is normalized and the term side is not. The normalizer is
+`|objf|`, frozen once from the first objective the fit produces – so the
+term is inert for that first evaluation and live afterwards, and a
+penalty is never applied at an unknown objective scale.
+
+Leaving the term side un-normalized is deliberate. `init = "ude"` starts
+the network near the zero function on purpose, so dividing by its own
+starting `mean(f^2)` would divide by something about four orders of
+magnitude too small, and the penalty would then dominate as soon as the
+network’s output reached its real size – measured, a penalty of 566
+against an objective of 76.
+
+``` r
+
+nlmixr2est::nlmixr2(ude, d, "focei", nn = nnControl(kinetic = 0.1))
+```
+
+The difference from `smooth` is where the question is asked. `smooth`
+sweeps one input across its range with the others pinned at their
+center, and charges for second differences: it asks whether the learned
+function is wiggly *in the abstract*, at input combinations that may
+never occur. `kinetic` asks how hard the network is pushing *where the
+solution really goes*, which makes it a statement about the dynamics the
+solver has to integrate. Inputs the trial solve does not carry – an eta,
+or a compound expression such as `nn(central/Vc)` – are held at their
+center rather than paired with rows they never occurred with;
+fabricating input combinations is exactly what this penalty exists to
+avoid.
+
+Two details are deliberate. The penalty is a **mean**, where `smooth` is
+a sum: the curvature grid is a fixed 11 points, so summing over it is
+dataset-independent, but the kinetic point set is however many rows the
+solve produced, and summing there would make one lambda mean something
+different for every study. And it is `f^2` rather than the plain norm
+the reference implementation uses, because the norm is not
+differentiable at zero and a UDE network initialized as a small
+perturbation of the mechanistic model (`init = "ude"`, the default)
+starts very close to exactly there.
+
+It is **off by default**, like the other two – but for an extra reason
+worth keeping separate: `l2` and `smooth` steer only the optimizer,
+while `kinetic` changes the dynamics being solved. A default that
+quietly flattens a learned elimination rate would be a default that
+quietly changes the model.
+
+Two things recommend turning it on. In Worsham and Kalita’s comparison
+it was the single largest improvement of any lever they measured –
+roughly halving the error – and it made training *faster*, because the
+learned dynamics became easier to integrate. That second effect is
+amplified here: the augmented solve carries a variational state per
+state-weight pair, so every solver step a smoother right-hand side saves
+is multiplied by the whole sensitivity block. Reach for it when the
+augmented solve is slow, or when the learned term looks stiffer than the
+data justifies.
+
+## Augmentation, and a limit worth knowing
+
+The clearest theoretical result in this literature is that NODE
+trajectories cannot cross. A flow in `n` dimensions is a homeomorphism
+at each time, so some maps are simply not representable, and no amount
+of training or capacity fixes it. Dupont et al. (2019) demonstrate this
+with the XOR and nested-spheres problems and solve it by **augmenting**
+the state with extra dimensions initialized at zero; Norcliffe et
+al. (2020) reach the same place by giving the state a learned velocity,
+a second-order NODE.
+
+This applies directly here. A one-state UDE
+
+``` r
+
+d/dt(centr) <- -f(nn(centr))
+```
+
+is exactly the one-dimensional non-crossing case: the learned flow is
+constrained in a way that has nothing to do with how well it is fitted.
+
+`nlmixr2nn` has no first-class `aug =` argument yet, and the reason is
+worth recording because it is a property of where
+[`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md) runs
+rather than of the construction. A
+[`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md) term
+expands during parsing and can only emit code around the line it sits
+on, so an augmented `d/dt()` lands next to the
+[`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md) call
+rather than after every compartment the user declared. rxode2 numbers
+compartments by first `d/dt()` appearance, so the augmentation *takes* a
+compartment number, and `cmt = 1` in the data then doses the latent
+instead of the model’s first compartment. Measured on a UDE fit: the
+dose landed in the augmented state, `centr` stayed at 0 for the entire
+profile, and the fit looked like a training failure when nothing was
+ever being trained. A UDF cannot see the model’s states to prevent it
+(`rxUdfUiMv()` is `NULL` while parsing), so the fix is to append the
+augmented compartments at model-assembly time, where the whole model is
+visible.
+
+Two other findings from that work are settled and will carry over:
+
+- **The augmented state must relax, not integrate.** The textbook drift
+  `d/dt(a) = f(x, a)` is self-exciting here – `a` re-enters its own
+  derivative through the network, and an unbounded activation makes that
+  exponential. The latent reached 1e154 by `t = 5` and the solver gave
+  up. `d/dt(a) = f(x, a) - a` has a stable fixed point at `f`, still
+  adds the dimension the non-crossing argument needs, and costs a fixed
+  memory timescale of one model time unit.
+- **The sensitivity machinery already handles it.** The forward
+  variational block for a two-network, two-state augmented model matches
+  finite differences of the likelihood to ~1e-7 relative, for both
+  networks (`test-nn-augsens.R`). Whatever else augmentation needs, the
+  gradient is not it.
+
+Meanwhile, two things reduce the sting, and neither is quite the same
+fix:
+
+- **Extra inputs.** The recommended pattern passes a latent random
+  effect into the network (`nn(centr, eta.nn)`), and covariates can be
+  passed the same way. That augments the *input* space per subject,
+  which is enough to separate trajectories that would otherwise coincide
+  – but it does not add dynamic dimensions, so it is not the ANODE
+  construction.
+
+- **Extra compartments.** Nothing stops you writing the augmented states
+  yourself as ordinary compartments with
+  [`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md) terms in
+  their right-hand sides. This is the real construction, at the cost of
+  writing it out – and, written by hand, your compartments keep their
+  numbers:
+
+  ``` r
+
+  model({
+    d/dt(a1)    <- nn(centr, a1) - a1     # the augmented dimension
+    g           <- nn(centr, a1)
+    d/dt(centr) <- -(1 / (1 + exp(-g))) * centr
+  })
+  ```
+
+  Declare it after the compartments your data doses into, and give the
+  relaxing `- a1` term its due: without it the latent runs away.
+
+## What is deliberately absent
+
+Some of the toolkit does not belong in a pharmacometric model, and that
+is worth saying explicitly so its absence does not read as an omission.
+
+- **Dropout.** It would make the ODE right-hand side stochastic,
+  breaking both the deterministic solve and the analytic Jacobian
+  `rxode2` needs. (The reference implementation offers it in one model
+  class and lists it as an open question in its own notebooks.)
+- **Learned nonlinear encoders and decoders.** Massaroli et al. (2020)
+  warn that a nonlinear encoding before a NODE renders the NODE itself
+  largely unnecessary, and identifiability here argues the same way.
+  [`nn()`](https://nlmixr2.github.io/nlmixr2nn/reference/nn.md) does
+  apply a fixed, data-derived diagonal input scaling – a non-learned
+  linear encoder – because a network fed raw PK-scale inputs starts
+  saturated and neither trains nor yields an identifiable latent eta.
+- **A solver zoo, and SDE integrators.** `rxode2`’s solvers are the ones
+  used, and they are already stiff-capable and adaptive.
+
+## References
+
+Chen RTQ, Rubanova Y, Bettencourt J, Duvenaud D (2018). “Neural ordinary
+differential equations.” *Advances in Neural Information Processing
+Systems* 31.
+
+Dupont E, Doucet A, Teh YW (2019). “Augmented neural ODEs.” *Advances in
+Neural Information Processing Systems* 32.
+
+Finlay C, Jacobsen J-H, Nurbekyan L, Oberman AM (2020). “How to train
+your neural ODE: the world of Jacobian and kinetic regularization.”
+*Proceedings of the 37th International Conference on Machine Learning*,
+3154-3164.
+
+Massaroli S, Poli M, Park J, Yamashita A, Asama H (2020). “Dissecting
+neural ODEs.” *Advances in Neural Information Processing Systems* 33,
+3952-3963.
+
+Norcliffe A, Bodnar C, Day B, Simidjievski N, Liò P (2020). “On second
+order behaviour in augmented neural ODEs.” *Advances in Neural
+Information Processing Systems* 33, 5911-5921.
+
+Worsham JM, Kalita JK (2025). “A guide to neural ordinary differential
+equations: machine learning for data-driven digital engineering.”
+*Digital Engineering*, 100060. Reference implementation:
+<https://github.com/joeworsh/Neural-ODE-Guide>
