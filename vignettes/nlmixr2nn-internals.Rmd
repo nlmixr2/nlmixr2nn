@@ -210,17 +210,34 @@ cat(nlmixr2nn:::nnAugmentModel(
   H = 1L))
 ```
 
-## The torch bridge
+## The training backend
 
-The modules live in C++ (`src/nnTorch.cpp`) so compiled solve code reaches them
-without an R callback. torch is the *optimizer and the weight container*, not
-the autodiff: the in-solve `dg/dw` uses the plain-C `nnWeightGrad`, which is
-thread-safe and keeps torch out of the ODE hot loop. `nnTorchSetGrad()` +
-`nnTorchStep()` inject an externally computed gradient into `.grad` and take an
-Adam/SGD step.
+The modules live in C++ so compiled solve code reaches them without an R
+callback. The backend is the *optimizer and the weight container*, not the
+autodiff: the in-solve `dg/dw` uses the plain-C `nnWeightGrad`, which is
+thread-safe and keeps the backend out of the ODE hot loop. `nnTorchSetGrad()` +
+`nnTorchStep()` inject an externally computed gradient and take an Adam/SGD
+step.
+
+Because that is all a fit asks of it, the backend is interchangeable, and
+`./configure` picks one at install time:
+
+| | `src/nnTorch.cpp` | `src/nnBuiltin.cpp` |
+|---|---|---|
+| selected when | the 'torch' package has its libtorch binaries | otherwise, and by default on Windows |
+| optimizer | libtorch's Adam/SGD | the same Adam/SGD, written out |
+| autograd | real | the analytic VJP, from `nnWeightGradWC` |
+
+`_nlmixr2nn_nnBackend()` reports which one is compiled in; only one ever is.
+The fallback is why the package installs where libtorch cannot be linked --
+Windows, where torch's libtorch is MSVC-built and Rtools is MinGW, and CRAN,
+which will not fetch a 2GB library at build time.
 
 The analytic weight gradient is checked against torch autograd across every
-activation and input dimension, which is what licenses using the C path.
+activation and input dimension, which is what licenses using the C path. That
+check needs a libtorch build to mean anything -- under the builtin backend both
+sides of it are the same routine -- so `test-nn-wgrad.R` skips unless libtorch
+is linked, and CI keeps one row that links it.
 
 ## Persistence
 

@@ -1,15 +1,18 @@
 # Generated from src/Makevars.in by ./configure -- do not edit src/Makevars.
 #
-# Link libtorch (the C++ backend shipped inside the R 'torch' package) directly.
-# Only nnTorch.cpp pulls in torch/torch.h; the hot-path C files stay plain C.
+# Two training backends, selected by configure:
+#   * libtorch (nnTorch.o) when the R 'torch' package has its binaries;
+#   * a self-contained Adam/SGD (nnBuiltin.o) otherwise.
+# Only one is compiled, so OBJECTS is listed explicitly rather than letting R
+# glob every source in this directory.
 #
 # The torch location is substituted by configure rather than discovered with
 # $(shell ...), which is a GNU make extension and not portable.
 CXX_STD = CXX17
 
-PKG_CPPFLAGS = -I"@TORCH_HOME@/include" \
-               -I"@TORCH_HOME@/include/torch/csrc/api/include" \
-               -D_GLIBCXX_USE_CXX11_ABI=1
+PKG_CPPFLAGS = @NN_CPPFLAGS@
 
-PKG_LIBS = -L"@TORCH_HOME@/lib" -Wl,-rpath,"@TORCH_HOME@/lib" \
-           -ltorch -ltorch_cpu -lc10
+PKG_LIBS = @NN_LIBS@
+
+OBJECTS = init.o nlmixr2nnContrib.o nnDydtForce.o nnEval.o nnEvalGen.o \
+          nnprobe.o nlmixr2nnPtr.o @NN_BACKEND_OBJ@

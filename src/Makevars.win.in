@@ -3,10 +3,13 @@
 #
 # As Makevars.in, minus -rpath: Windows resolves the torch DLLs through the
 # loader path rather than an embedded run path, and the R 'torch' package puts
-# them on it when its namespace loads.
+# them on it when its namespace loads.  In practice the builtin backend is what
+# gets built here -- see configure.win for why.
 CXX_STD = CXX17
 
-PKG_CPPFLAGS = -I"@TORCH_HOME@/include" \
-               -I"@TORCH_HOME@/include/torch/csrc/api/include"
+PKG_CPPFLAGS = @NN_CPPFLAGS@
 
-PKG_LIBS = -L"@TORCH_HOME@/lib" -ltorch -ltorch_cpu -lc10
+PKG_LIBS = @NN_LIBS@
+
+OBJECTS = init.o nlmixr2nnContrib.o nnDydtForce.o nnEval.o nnEvalGen.o \
+          nnprobe.o nlmixr2nnPtr.o @NN_BACKEND_OBJ@

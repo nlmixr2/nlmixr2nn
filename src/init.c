@@ -38,7 +38,10 @@ extern SEXP _nlmixr2nn_nnUnregisterLoader(void);
 /* dydt forcing hook test entry (nnDydtForce.c) */
 extern SEXP _nlmixr2nn_testDydtForce(SEXP, SEXP, SEXP);
 
-/* torch backend (nnTorch.cpp) */
+/* training backend: nnTorch.cpp (libtorch) or nnBuiltin.cpp (self-contained
+   Adam/SGD).  configure compiles exactly one of them; both define this whole
+   set, so nothing here depends on which was chosen. */
+extern SEXP _nlmixr2nn_nnBackend(void);
 extern SEXP _nlmixr2nn_nnTorchProbe(SEXP);
 extern SEXP _nlmixr2nn_nnTorchAvailable(void);
 extern SEXP _nlmixr2nn_nnTorchInit(SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -78,6 +81,7 @@ void R_init_nlmixr2nn(DllInfo *dll) {
     {"_nlmixr2nn_getContrib",(DL_FUNC) &_nlmixr2nn_getContrib,0},
     {"_nlmixr2nn_capReset",(DL_FUNC) &_nlmixr2nn_capReset,3},
     {"_nlmixr2nn_capGet",(DL_FUNC) &_nlmixr2nn_capGet,0},
+    {"_nlmixr2nn_nnBackend",(DL_FUNC) &_nlmixr2nn_nnBackend,0},
     {"_nlmixr2nn_nnTorchProbe",(DL_FUNC) &_nlmixr2nn_nnTorchProbe,1},
     {"_nlmixr2nn_nnTorchAvailable",(DL_FUNC) &_nlmixr2nn_nnTorchAvailable,0},
     {"_nlmixr2nn_nnTorchInit",(DL_FUNC) &_nlmixr2nn_nnTorchInit,5},

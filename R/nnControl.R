@@ -18,7 +18,7 @@
 #' Two modes:
 #' * `"joint"` (default) -- co-optimizes the population parameters and the network
 #'   weights in one interleaved loop (a few warm-started partial inner iterations
-#'   + a torch weight step each round), the DeepPumas-style approach;
+#'   + a weight-optimizer step each round), the DeepPumas-style approach;
 #' * `"iter"` -- runs a full inner fit each round with the weights fixed, then a
 #'   weight update (simpler solve/update/solve).
 #'
@@ -40,11 +40,11 @@
 #' @param rounds maximum number of rounds.
 #' @param tol convergence tolerance on the relative round-to-round change (weights
 #'   for `"iter"`; weights and objective for `"joint"`).  0 always runs `rounds`.
-#' @param wSteps torch weight-optimizer steps per round.
+#' @param wSteps weight-optimizer steps per round.
 #' @param outerPerRound (`"joint"` only) inner outer-iterations per round -- the
 #'   partial step that makes it joint rather than a full re-fit.
-#' @param lr torch optimizer learning rate.
-#' @param warmSteps optional naive-pooled (eta=0) torch warm-up steps before the
+#' @param lr weight-optimizer learning rate.
+#' @param warmSteps optional naive-pooled (eta=0) warm-up steps before the
 #'   loop (default 0).
 #' @param warmStart population weight pre-fit before the loop -- the "nlm bridge".
 #'   Runs a fixed-effects (eta = 0) fit of the weights with the named nlm-family
@@ -151,7 +151,10 @@
 #'   solve does not carry -- an eta, or a compound expression such as
 #'   `nn(central/Vc)` -- are held at their center rather than being paired with
 #'   rows they never occurred with.
-#' @param optimizer torch optimizer, `"adam"` or `"sgd"`.
+#' @param optimizer weight optimizer, `"adam"` or `"sgd"`.  Supplied by
+#'   libtorch when this build linked it and by the package's own
+#'   implementation otherwise; given the same starting weights the two take
+#'   the same steps.
 #' @param cotangent source of the endpoint score `dLL/df` used to form the weight
 #'   gradient.  `"gaussian"` is the closed-form additive/proportional Gaussian
 #'   cotangent.  `"dist"` is the endpoint distribution's own derivative, for a
@@ -164,7 +167,7 @@
 #'   apply to a count endpoint: there the hook reports `dLL/df = 1`, because `f`
 #'   is the log-density itself.  Left unset, the source is chosen from the
 #'   endpoint, which is what you want.
-#' @param seed optional integer seed for torch weight initialization (ignored when
+#' @param seed optional integer seed for weight initialization (ignored when
 #'   the model already carries trained weights, which are used as the start).
 #' @return an object of class `"nnControl"`.
 #' @export

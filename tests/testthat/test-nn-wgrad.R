@@ -4,7 +4,10 @@
 ## autograd (a backward pass with unit cotangent yields d(output)/d(w)).
 
 test_that("analytic nnWeightGrad matches torch autograd across activations/K", {
-  skip_if_no_torch()
+  ## Must be a real libtorch build: this compares the analytic formula against
+  ## an INDEPENDENT implementation.  The builtin backend computes its VJP from
+  ## the very routine under test, so the comparison would be circular.
+  skip_if_not_torch_backend()
   code <- c(relu = 0L, softplus = 1L, tanh = 2L, gelu = 3L, silu = 4L)
   for (act in c("softplus", "tanh", "gelu", "silu")) {
     for (K in c(1L, 2L, 3L)) {

@@ -141,17 +141,33 @@ explains why.
 
 ## Installation
 
-`nlmixr2nn` builds against libtorch through the `torch` R package, and
-needs the development versions of `rxode2` and `nlmixr2est`:
+`nlmixr2nn` needs the development versions of `rxode2` and `nlmixr2est`:
 
 ``` r
-install.packages("torch")
-torch::install_torch()
-
 # install.packages("pak")
 pak::pak(c("nlmixr2/rxode2", "nlmixr2/nlmixr2est", "nlmixr2/nlmixr2nn",
            "nlmixr2"))
 ```
+
+There is nothing else to install. Training uses a self-contained
+Adam/SGD optimizer built into the package.
+
+If the `torch` package and its libtorch binaries are present when
+nlmixr2nn is installed, libtorch is linked as the training backend
+instead. Given the same starting weights the two take the same optimizer
+steps, because a fit feeds the optimizer the analytic gradient from the
+ODE forward sensitivity either way, and both implement the same Adam and
+SGD. A model carries its own weights from `nn()`, so that is the normal
+case; the backends differ only in what an un-seeded network starts from
+when there are no weights to load. libtorch also gives the test suite a
+second, independent implementation to check the gradients against.
+
+``` r
+install.packages("torch")
+torch::install_torch()        # then re-install nlmixr2nn to link it
+```
+
+`nlmixr2nn:::.nnBackend()` reports which one a build is using.
 
 Population-only fits also need the optimizer’s own package, for example
 `minqa` for `"bobyqa"` or `lbfgsb3c` for `"lbfgsb3c"`.

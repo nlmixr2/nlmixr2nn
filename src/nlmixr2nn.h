@@ -26,6 +26,16 @@ double nnHess(int id, const double *x, int m, int l);
 void nnWeightGrad(int id, const double *x, double *g);   /* d(out)/d(each weight) */
 double nnWeightGradJ(int id, const double *x, int j);    /* d(out)/d(w_j) scalar */
 
+/* Same math as above, but from an EXPLICIT weight vector rather than the
+   registry + par_ptr.  The builtin training backend (nnBuiltin.cpp) owns its
+   weights outside the solve, and uses these so there is ONE copy of the
+   activation switch and the weight-gradient formula in the package -- a second
+   copy in the backend would be free to drift from the one the solve uses.
+   Layout is nnWeightLayout order: W1 (H,K) row-major, b1 (H), W2 (1,H), b2. */
+double nnForwardWC(int K, int H, int act, const double *w, const double *x);
+void nnWeightGradWC(int K, int H, int act, const double *w, const double *x,
+                    double *g);
+
 /* generated in nnEvalGen.c: registers the nn<K> scalar entry points with rxode2 */
 void nnRegisterCallables(void);
 

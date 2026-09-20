@@ -30,14 +30,14 @@ nnControl(
 \item{tol}{convergence tolerance on the relative round-to-round change (weights
 for `"iter"`; weights and objective for `"joint"`).  0 always runs `rounds`.}
 
-\item{wSteps}{torch weight-optimizer steps per round.}
+\item{wSteps}{weight-optimizer steps per round.}
 
 \item{outerPerRound}{(`"joint"` only) inner outer-iterations per round -- the
 partial step that makes it joint rather than a full re-fit.}
 
-\item{lr}{torch optimizer learning rate.}
+\item{lr}{weight-optimizer learning rate.}
 
-\item{warmSteps}{optional naive-pooled (eta=0) torch warm-up steps before the
+\item{warmSteps}{optional naive-pooled (eta=0) warm-up steps before the
 loop (default 0).}
 
 \item{warmStart}{population weight pre-fit before the loop -- the "nlm bridge".
@@ -75,9 +75,12 @@ apply to a count endpoint: there the hook reports `dLL/df = 1`, because `f`
 is the log-density itself.  Left unset, the source is chosen from the
 endpoint, which is what you want.}
 
-\item{optimizer}{torch optimizer, `"adam"` or `"sgd"`.}
+\item{optimizer}{weight optimizer, `"adam"` or `"sgd"`.  Supplied by
+libtorch when this build linked it and by the package's own
+implementation otherwise; given the same starting weights the two take
+the same steps.}
 
-\item{seed}{optional integer seed for torch weight initialization (ignored when
+\item{seed}{optional integer seed for weight initialization (ignored when
 the model already carries trained weights, which are used as the start).}
 
 \item{l2}{strength of an L2 penalty on the network's weights -- the same idea
@@ -181,7 +184,7 @@ arguments of `nlmixr2()`.
 Two modes:
 * `"joint"` (default) -- co-optimizes the population parameters and the network
   weights in one interleaved loop (a few warm-started partial inner iterations
-  + a torch weight step each round), the DeepPumas-style approach;
+  + a weight-optimizer step each round), the DeepPumas-style approach;
 * `"iter"` -- runs a full inner fit each round with the weights fixed, then a
   weight update (simpler solve/update/solve).
 }

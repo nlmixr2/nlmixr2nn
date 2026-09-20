@@ -93,6 +93,10 @@ static torch::optim::Optimizer *getOpt(int id) {
 
 extern "C" {
 
+// Which backend was compiled in.  The counterpart in nnBuiltin.cpp returns
+// "builtin"; exactly one of the two is ever linked.
+SEXP _nlmixr2nn_nnBackend(void) { return Rf_mkString("torch"); }
+
 SEXP _nlmixr2nn_nnTorchAvailable(void) { return Rf_ScalarLogical(TRUE); }
 
 SEXP _nlmixr2nn_nnTorchProbe(SEXP n) {
@@ -103,9 +107,27 @@ SEXP _nlmixr2nn_nnTorchProbe(SEXP n) {
 // create (or replace) a module for network `id`
 SEXP _nlmixr2nn_nnTorchInit(SEXP id, SEXP K, SEXP H, SEXP act, SEXP seed) {
   int i = Rf_asInteger(id);
+  // Validate BEFORE handing the dimensions to libtorch.  torch::nn::Linear
+  // with a negative size does not throw something R can catch -- it aborts the
+  // process from inside libtorch (observed: a c10 error unwinding through
+  // LinearImpl::reset(), killing the R session).  K and H reach here from the
+  // model and from nn(nHidden=), so neither is trusted.
+  int k = Rf_asInteger(K), h = Rf_asInteger(H);
+  if (k < 1 || h < 1) {
+    Rf_error("nn dimensions must be positive (K=%d, H=%d)", k, h);
+  }
+  double nw = (double) h * (double) k + 2.0 * (double) h + 1.0;
+  if (nw > 1e8) {
+    Rf_error("nn network too large (K=%d, H=%d would need %.0f weights)",
+             k, h, nw);
+  }
   if (!Rf_isNull(seed)) torch::manual_seed((uint64_t) Rf_asInteger(seed));
   // operator[] would default-construct MLP (which has no default ctor)
   g_modules.insert_or_assign(i, MLP(Rf_asInteger(K), Rf_asInteger(H), Rf_asInteger(act)));
+  // Drop any optimizer built over the OLD module's parameters: it would go on
+  // stepping tensors this module no longer owns.  (The builtin backend does the
+  // same, so re-initializing behaves identically under both.)
+  g_opt.erase(i);
   return Rf_ScalarInteger(i);
 }
 

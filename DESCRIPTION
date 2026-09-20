@@ -12,12 +12,14 @@ License: GPL (>= 3)
 URL: https://nlmixr2.github.io/nlmixr2nn/, https://github.com/nlmixr2/nlmixr2nn
 BugReports: https://github.com/nlmixr2/nlmixr2nn/issues
 Encoding: UTF-8
-Imports: rxode2, checkmate, stats, symengine, torch
+Imports: rxode2, checkmate, stats, symengine
 LinkingTo: rxode2, Rcpp, nlmixr2est
-SystemRequirements: libtorch (via the 'torch' R package; C++17). Both the
-    'torch' package and its libtorch binaries (torch::install_torch()) must be
-    present to build, and libtorch is loaded at run time.
-Suggests: nlmixr2, nlmixr2est, numDeriv, testthat (>= 3.0.0),
+SystemRequirements: C++17. Optionally libtorch, via the 'torch' R package:
+    when the 'torch' package and its libtorch binaries
+    (torch::install_torch()) are present at build time, they are linked as the
+    training backend. When they are not, a self-contained Adam/SGD optimizer is
+    built instead, so the package installs and trains with no external library.
+Suggests: torch, nlmixr2, nlmixr2est, numDeriv, testthat (>= 3.0.0),
     knitr, rmarkdown, minqa, lbfgsb3c, n1qn1, ggplot2, callr, withr
 VignetteBuilder: knitr
 NeedsCompilation: yes

@@ -20,16 +20,12 @@ jobs:
       group: pkgdown-${{ github.event_name != 'pull_request' || github.run_id }}
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
-      TORCH_INSTALL: 1
-      # See R-CMD-check.yaml: TORCH_HOME cannot be set in a job-level `env:`
-      # block, because the `runner` context is unavailable there.
+      # Docs build against the builtin backend -- see the note above the install
+      # step.
+      NLMIXR2NN_BACKEND: builtin
     permissions:
       contents: write
     steps:
-      - name: Point TORCH_HOME outside the R library
-        run: echo "TORCH_HOME=${{ runner.temp }}/torch" >> $GITHUB_ENV
-        shell: bash
-
       - uses: actions/checkout@v4
 
       - uses: r-lib/actions/setup-pandoc@v2
@@ -64,18 +60,9 @@ jobs:
             stringfish=?source
           needs: website
 
-      - name: Cache libtorch
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/torch
-          key: libtorch-${{ runner.os }}-1
-
-      - name: Install libtorch
-        run: |
-          torch::install_torch()
-          stopifnot(torch::torch_is_installed())
-        shell: Rscript {0}
-
+      # No libtorch step: the docs build only needs the package to install, and
+      # the builtin backend needs nothing.  That keeps a ~2GB download out of
+      # every docs build.
       - name: Install nlmixr2nn
         run: R CMD INSTALL --preclean .
         shell: bash

@@ -169,6 +169,14 @@ nnTorchTrain <- function(id, X, target, steps = 200L, lr = 0.05, type = "adam") 
   loss
 }
 
+## Which training backend this build linked: "torch" or "builtin".
+##
+## configure picks one and compiles only that translation unit, so this is a
+## property of the INSTALLED package, not of what is installed alongside it.
+.nnBackend <- function() {
+  tryCatch(.Call(`_nlmixr2nn_nnBackend`), error = function(e) NA_character_)
+}
+
 ## Is the libtorch backend actually usable?
 ##
 ## The C probe alone answers "was this package built against libtorch", which is
@@ -177,20 +185,33 @@ nnTorchTrain <- function(id, X, target, steps = 200L, lr = 0.05, type = "adam") 
 ## really be false: install.packages("torch") does not fetch libtorch; that is a
 ## separate torch::install_torch().
 .nnTorchAvailable <- function() {
-  isTRUE(tryCatch(torch::torch_is_installed(), error = function(e) FALSE)) &&
-    isTRUE(tryCatch(.Call("_nlmixr2nn_nnTorchAvailable"), error = function(e) FALSE))
+  identical(.nnBackend(), "torch") &&
+    isTRUE(tryCatch(requireNamespace("torch", quietly = TRUE) &&
+                      torch::torch_is_installed(), error = function(e) FALSE)) &&
+    isTRUE(tryCatch(.Call(`_nlmixr2nn_nnTorchAvailable`), error = function(e) FALSE))
+}
+
+## Can weights be trained at all?
+##
+## The builtin backend needs nothing installed -- it IS the package -- so this
+## is only ever false for a libtorch build whose binaries have gone missing.
+.nnTrainAvailable <- function() {
+  identical(.nnBackend(), "builtin") || .nnTorchAvailable()
 }
 
 ## The message a user gets when training cannot start: what to run, not just
 ## what is missing.
 .nnTorchRequire <- function(what = "training a neural network") {
-  if (.nnTorchAvailable()) return(invisible(TRUE))
-  stop(what, " needs the libtorch backend, which is not available.\n",
+  if (.nnTrainAvailable()) return(invisible(TRUE))
+  stop(what, " needs the libtorch backend this package was built against, ",
+       "which is not available.\n",
        "  install.packages(\"torch\")\n",
        "  torch::install_torch()\n",
        "torch::install_torch_sitrep() reports what torch has installed.\n",
-       "Parsing, solving and simulating a model with nn() do not need ",
-       "libtorch -- only training does.", call. = FALSE)
+       "Re-installing nlmixr2nn without libtorch present builds the builtin ",
+       "optimizer instead, which needs nothing.\n",
+       "Parsing, solving and simulating a model with nn() need neither -- ",
+       "only training does.", call. = FALSE)
 }
 
 #' Create C++ torch modules for all networks in a model

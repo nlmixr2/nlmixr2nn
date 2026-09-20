@@ -9,10 +9,17 @@
 Embed neural networks inside ODE right-hand sides for rxode2/nlmixr2.  A
 model containing [nn()] is an ordinary rxode2/nlmixr2 model: it is seeded when
 it is parsed, it solves, [nlmixr2est::nlmixr2()] trains it, and a fitted model
-is self-contained.  A C++ libtorch module is the training optimizer, loaded
-from the model's own weights.
+is self-contained.
 }
 \details{
+The training optimizer is a C++ module loaded from the model's own weights.
+`./configure` picks its backend at install time: libtorch when the 'torch'
+package has its binaries, and a self-contained Adam/SGD otherwise.  The
+choice does not change a fit -- the weight gradient is the analytic one from
+the ODE forward sensitivity in both cases, so the backend only supplies the
+optimizer and the parameter store -- and it is what lets the package install
+where libtorch cannot be linked at all.
+
 The public surface is deliberately four functions: [nn()] in the model,
 [nnControl()] to steer training, and [nnEval()]/[nnWeights()] to inspect what
 a network learned.
@@ -26,6 +33,15 @@ derivatives are not supported in rxode2" the moment a model needs a Jacobian.
 They are machine-facing rather than user-facing, hence `@keywords internal`.
 (`nnWg<K>()` is deliberately not exported: it only ever appears in generated
 model text handed to C, never through the symengine path.)
+}
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://nlmixr2.github.io/nlmixr2nn/}
+  \item \url{https://github.com/nlmixr2/nlmixr2nn}
+  \item Report bugs at \url{https://github.com/nlmixr2/nlmixr2nn/issues}
+}
+
 }
 \author{
 \strong{Maintainer}: Matthew Fidler \email{matthew.fidler@gmail.com}

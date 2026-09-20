@@ -1,50 +1,75 @@
 #!/bin/sh
 # Windows counterpart of ./configure: writes src/Makevars.win from
 # src/Makevars.win.in.  Rtools provides sh, so this is the same script with the
-# Windows template and the Windows library name.
+# Windows template.
+#
+# Windows DEFAULTS TO THE BUILTIN BACKEND, and that is not timidity.  The
+# libtorch that the R 'torch' package ships for Windows is built with MSVC,
+# while Rtools compiles with MinGW g++: the two mangle C++ symbols differently
+# and there are no MinGW import libraries in torch's lib/.  Linking
+# -ltorch -ltorch_cpu -lc10 therefore fails at link time even though torch.dll
+# is plainly sitting there, so probing for the DLL (as this script used to do)
+# reports success and hands the failure to the linker.
+#
+# torch's own R package avoids this by going through 'lantern', a C-ABI shim it
+# loads at runtime -- a C++ header link like ours has no such escape.  The
+# builtin Adam/SGD sidesteps the whole question, which is what makes a working
+# Windows binary -- and so a CRAN submission -- possible.
+#
+# Set NLMIXR2NN_BACKEND=torch to attempt the libtorch link anyway (e.g. in an
+# MSVC toolchain, or to re-test whether upstream has started shipping import
+# libraries).
 
 set -e
+
+# sed treats '&' as "the matched text" and '\' as an escape IN THE REPLACEMENT,
+# so a TORCH_HOME containing either corrupts the Makevars silently (measured:
+# /opt/a&b/torch produced -I"/opt/a@NN_CPPFLAGS@b/torch/include").  Escape them,
+# plus the '|' used as the delimiter.
+nn_esc() {
+  printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'
+}
 
 : "${R_HOME:=$(R RHOME)}"
 RSCRIPT="${R_HOME}/bin/Rscript"
 
-TORCH_HOME=$("${RSCRIPT}" --vanilla tools/torch-home.R 2>/dev/null || true)
+WANT="${NLMIXR2NN_BACKEND:-builtin}"
 
-fail() {
-  cat >&2 <<EOF
-
-------------------------------- nlmixr2nn -------------------------------
-$1
-
-nlmixr2nn links the libtorch C++ library that the R 'torch' package ships.
-Both the R package and its libtorch binaries are required to build.
-
-To fix:
-
-    install.packages("torch")
-    torch::install_torch()
-
-then install nlmixr2nn again.
--------------------------------------------------------------------------
-
-EOF
-  exit 1
-}
-
-if [ -z "${TORCH_HOME}" ]; then
-  fail "The R package 'torch' was not found."
+if [ "${WANT}" = "torch" ]; then
+  TORCH_HOME=$("${RSCRIPT}" --vanilla tools/torch-home.R 2>/dev/null || true)
+  if [ -z "${TORCH_HOME}" ] || [ ! -d "${TORCH_HOME}/include" ]; then
+    echo "nlmixr2nn: NLMIXR2NN_BACKEND=torch but libtorch was not found" >&2
+    exit 1
+  fi
+  echo "nlmixr2nn: training backend = libtorch (${TORCH_HOME}) [requested]"
+  NN_CPPFLAGS="-I\"${TORCH_HOME}/include\" -I\"${TORCH_HOME}/include/torch/csrc/api/include\" -DNN_HAVE_TORCH"
+  NN_LIBS="-L\"${TORCH_HOME}/lib\" -ltorch -ltorch_cpu -lc10"
+  NN_BACKEND_OBJ="nnTorch.o"
+else
+  echo "nlmixr2nn: training backend = builtin"
+  NN_CPPFLAGS=""
+  NN_LIBS=""
+  NN_BACKEND_OBJ="nnBuiltin.o"
 fi
 
-if [ ! -d "${TORCH_HOME}/include" ]; then
-  fail "Found torch at '${TORCH_HOME}', but no include/ directory there."
+
+# Drop the OTHER backend's object file and any previously linked shared object.
+# Without this, re-configuring an already-built tree can relink the STALE
+# backend: make sees the old .o is up to date, and the install silently keeps
+# the backend you just switched away from (measured -- a tree that had built
+# libtorch produced a "builtin" configure and a libtorch .so anyway).  It
+# matters to users too: installing torch later and re-installing must actually
+# switch the backend over.
+if [ "${NN_BACKEND_OBJ}" = "nnTorch.o" ]; then
+  rm -f src/nnBuiltin.o
+else
+  rm -f src/nnTorch.o
 fi
+rm -f src/nlmixr2nn.so
 
-if [ ! -f "${TORCH_HOME}/lib/torch.dll" ] && [ ! -f "${TORCH_HOME}/lib/libtorch.dll" ]; then
-  fail "Found torch at '${TORCH_HOME}', but no torch DLL in lib/."
-fi
-
-echo "nlmixr2nn: using libtorch in ${TORCH_HOME}"
-
-sed -e "s|@TORCH_HOME@|${TORCH_HOME}|g" src/Makevars.win.in > src/Makevars.win
+sed -e "s|@NN_CPPFLAGS@|$(nn_esc "${NN_CPPFLAGS}")|g" \
+    -e "s|@NN_LIBS@|$(nn_esc "${NN_LIBS}")|g" \
+    -e "s|@NN_BACKEND_OBJ@|$(nn_esc "${NN_BACKEND_OBJ}")|g" \
+    src/Makevars.win.in > src/Makevars.win
 
 exit 0

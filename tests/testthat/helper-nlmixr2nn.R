@@ -12,8 +12,31 @@
 
 ## --- skips ------------------------------------------------------------------
 
+## Which backend this build linked: "torch" or "builtin".
+nn_backend <- function() {
+  tryCatch(.Call("_nlmixr2nn_nnBackend", PACKAGE = "nlmixr2nn"),
+           error = function(e) NA_character_)
+}
+
+## Can this build train at all?  Since the builtin Adam/SGD is compiled in
+## whenever libtorch is absent, the answer is normally yes on every platform --
+## which is the point of the fallback.  This still skips a libtorch build whose
+## binaries have gone missing.
 skip_if_no_torch <- function() {
   skip_if_not_installed("rxode2")
+  ok <- identical(nn_backend(), "builtin") ||
+    tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable", PACKAGE = "nlmixr2nn")),
+             error = function(e) FALSE)
+  if (!ok) skip("no training backend available")
+}
+
+## For tests that must exercise LIBTORCH specifically -- chiefly the ones that
+## check the analytic weight gradient against an independent implementation.
+## Under the builtin backend both sides of that comparison are the same code, so
+## the check would pass without testing anything.
+skip_if_not_torch_backend <- function() {
+  skip_if_not_installed("rxode2")
+  if (!identical(nn_backend(), "torch")) skip("not a libtorch build")
   ok <- tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable", PACKAGE = "nlmixr2nn")),
                  error = function(e) FALSE)
   if (!ok) skip("libtorch backend not available")

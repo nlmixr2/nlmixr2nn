@@ -5,8 +5,35 @@
 # extension: "Portable Makefiles do not use GNU extensions" (Writing R
 # Extensions).  Discovery belongs in configure, which is allowed to run
 # commands; the Makevars it produces is plain, portable make.
+#
+# Missing libtorch is NOT an error.  There are two training backends:
+#
+#   * libtorch (src/nnTorch.cpp) when the R 'torch' package has its binaries.
+#     This is the reference backend and what the gradient-check tests compare
+#     against.
+#   * a self-contained Adam/SGD (src/nnBuiltin.cpp) otherwise.  The fit path
+#     only ever injects the analytic dLoss/dw computed from the ODE forward
+#     sensitivity and asks the optimizer to step, so this loses no capability
+#     in a real fit.
+#
+# That fallback is what makes the package installable where libtorch is not,
+# which includes CRAN's build machines: libtorch is a ~2GB download that
+# torch::install_torch() fetches separately, and a package that cannot build
+# without it cannot be submitted.
+#
+# Set NLMIXR2NN_BACKEND=builtin to force the fallback even when libtorch is
+# present (useful for testing that path), or =torch to make a missing libtorch
+# a hard error instead of a fallback.
 
 set -e
+
+# sed treats '&' as "the matched text" and '\' as an escape IN THE REPLACEMENT,
+# so a TORCH_HOME containing either corrupts the Makevars silently (measured:
+# /opt/a&b/torch produced -I"/opt/a@NN_CPPFLAGS@b/torch/include").  Escape them,
+# plus the '|' used as the delimiter.
+nn_esc() {
+  printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'
+}
 
 : "${R_HOME:=$(R RHOME)}"
 RSCRIPT="${R_HOME}/bin/Rscript"
@@ -16,52 +43,75 @@ if [ ! -x "${RSCRIPT}" ]; then
   exit 1
 fi
 
-TORCH_HOME=$("${RSCRIPT}" --vanilla tools/torch-home.R 2>/dev/null || true)
+WANT="${NLMIXR2NN_BACKEND:-auto}"
 
-fail() {
+TORCH_HOME=""
+if [ "${WANT}" != "builtin" ]; then
+  TORCH_HOME=$("${RSCRIPT}" --vanilla tools/torch-home.R 2>/dev/null || true)
+fi
+
+# Is this a real libtorch tree, or just the R package without its binaries?
+have_torch=no
+if [ -n "${TORCH_HOME}" ] && [ -d "${TORCH_HOME}/include" ]; then
+  # One library is enough to tell a real libtorch tree from an empty one; the
+  # extension differs by platform.
+  if [ -f "${TORCH_HOME}/lib/libtorch.so" ] ||
+     [ -f "${TORCH_HOME}/lib/libtorch.dylib" ] ||
+     [ -f "${TORCH_HOME}/lib/torch.dll" ]; then
+    have_torch=yes
+  fi
+fi
+
+if [ "${WANT}" = "torch" ] && [ "${have_torch}" != "yes" ]; then
   cat >&2 <<EOF
 
 ------------------------------- nlmixr2nn -------------------------------
-$1
-
-nlmixr2nn embeds a neural network in the ODE right-hand side and links the
-libtorch C++ library that the R 'torch' package ships.  Both the R package
-and its libtorch binaries are required to build.
-
-To fix:
+NLMIXR2NN_BACKEND=torch was requested, but libtorch was not found.
 
     install.packages("torch")
     torch::install_torch()
 
-then install nlmixr2nn again.  torch::install_torch_sitrep() reports what
-torch thinks is installed and where.
+torch::install_torch_sitrep() reports what torch thinks is installed and
+where.  Unset NLMIXR2NN_BACKEND to fall back to the builtin optimizer
+instead of failing.
 -------------------------------------------------------------------------
 
 EOF
   exit 1
-}
-
-if [ -z "${TORCH_HOME}" ]; then
-  fail "The R package 'torch' was not found."
 fi
 
-if [ ! -d "${TORCH_HOME}/include" ]; then
-  fail "Found torch at '${TORCH_HOME}', but no include/ directory there.
-libtorch itself does not appear to be installed."
+if [ "${have_torch}" = "yes" ]; then
+  echo "nlmixr2nn: training backend = libtorch (${TORCH_HOME})"
+  NN_CPPFLAGS="-I\"${TORCH_HOME}/include\" -I\"${TORCH_HOME}/include/torch/csrc/api/include\" -D_GLIBCXX_USE_CXX11_ABI=1 -DNN_HAVE_TORCH"
+  NN_LIBS="-L\"${TORCH_HOME}/lib\" -Wl,-rpath,\"${TORCH_HOME}/lib\" -ltorch -ltorch_cpu -lc10"
+  NN_BACKEND_OBJ="nnTorch.o"
+else
+  echo "nlmixr2nn: training backend = builtin (libtorch not found)"
+  echo "nlmixr2nn: install.packages(\"torch\"); torch::install_torch() enables the libtorch backend"
+  NN_CPPFLAGS=""
+  NN_LIBS=""
+  NN_BACKEND_OBJ="nnBuiltin.o"
 fi
-
-# One library is enough to tell a real libtorch tree from an empty one; the
-# extension differs by platform.
-if [ ! -f "${TORCH_HOME}/lib/libtorch.so" ] &&
-   [ ! -f "${TORCH_HOME}/lib/libtorch.dylib" ] &&
-   [ ! -f "${TORCH_HOME}/lib/torch.dll" ]; then
-  fail "Found torch at '${TORCH_HOME}', but no libtorch library in lib/.
-libtorch itself does not appear to be installed."
-fi
-
-echo "nlmixr2nn: using libtorch in ${TORCH_HOME}"
 
 # '|' as the sed delimiter: paths contain '/' but essentially never '|'.
-sed -e "s|@TORCH_HOME@|${TORCH_HOME}|g" src/Makevars.in > src/Makevars
+
+# Drop the OTHER backend's object file and any previously linked shared object.
+# Without this, re-configuring an already-built tree can relink the STALE
+# backend: make sees the old .o is up to date, and the install silently keeps
+# the backend you just switched away from (measured -- a tree that had built
+# libtorch produced a "builtin" configure and a libtorch .so anyway).  It
+# matters to users too: installing torch later and re-installing must actually
+# switch the backend over.
+if [ "${NN_BACKEND_OBJ}" = "nnTorch.o" ]; then
+  rm -f src/nnBuiltin.o
+else
+  rm -f src/nnTorch.o
+fi
+rm -f src/nlmixr2nn.so
+
+sed -e "s|@NN_CPPFLAGS@|$(nn_esc "${NN_CPPFLAGS}")|g" \
+    -e "s|@NN_LIBS@|$(nn_esc "${NN_LIBS}")|g" \
+    -e "s|@NN_BACKEND_OBJ@|$(nn_esc "${NN_BACKEND_OBJ}")|g" \
+    src/Makevars.in > src/Makevars
 
 exit 0

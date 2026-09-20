@@ -195,6 +195,25 @@ static void nnWeightGradCore(const double *W1, const double *b1, const double *W
   g[ob2] = 1.0;                                                   /* d/db2      */
 }
 
+/* Explicit-weight wrappers (declared in nlmixr2nn.h).  nnAct/nnWeightGradCore
+   are static to this TU, so the builtin backend reaches them through these
+   rather than reimplementing them. */
+double nnForwardWC(int K, int H, int act, const double *w, const double *x) {
+  const double *W1 = w, *b1 = w + H * K, *W2 = b1 + H;
+  double v = W2[H];                                /* b2 */
+  for (int j = 0; j < H; j++) {
+    double z = b1[j];
+    for (int k = 0; k < K; k++) z += W1[j * K + k] * x[k];
+    v += W2[j] * nnAct(act, z);
+  }
+  return v;
+}
+
+void nnWeightGradWC(int K, int H, int act, const double *w, const double *x,
+                    double *g) {
+  nnWeightGradCore(w, w + H * K, w + H * K + H, K, H, act, x, g);
+}
+
 void nnWeightGrad(int id, const double *x, double *g) {
   int K, H, act;
   const double *w = nnWeights(id, &K, &H, &act);   /* reads par_ptr */

@@ -22,9 +22,16 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ## risk.  Unset means run them, so a local build still shows real output.
 .wantFits <- !identical(tolower(Sys.getenv("NLMIXR2NN_VIGNETTE_FITS", "true")),
                         "false")
-.hasTorch <- .hasEst && .wantFits &&
+## Ask whether this build can TRAIN, not whether it linked libtorch: a build
+## using the builtin Adam/SGD trains perfectly well and must still run the fits
+## below.  Testing the libtorch probe alone would ship a vignette that skips
+## every fit on exactly the platforms the fallback exists for.
+.nnBk     <- tryCatch(.Call("_nlmixr2nn_nnBackend", PACKAGE = "nlmixr2nn"),
+                      error = function(e) NA_character_)
+.canTrain <- identical(.nnBk, "builtin") ||
   tryCatch(isTRUE(.Call("_nlmixr2nn_nnTorchAvailable", PACKAGE = "nlmixr2nn")),
            error = function(e) FALSE)
+.hasTorch <- .hasEst && .wantFits && .canTrain
 ```
 
 ## What `nn()` is

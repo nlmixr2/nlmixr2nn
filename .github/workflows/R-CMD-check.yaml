@@ -21,9 +21,6 @@ jobs:
 
     name: ${{ matrix.config.os }} (${{ matrix.config.r }})
 
-    # Windows is expected to fail until the link is proven -- see the row below.
-    continue-on-error: ${{ matrix.config.allowFailure || false }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -37,41 +34,50 @@ jobs:
           # `R CMD check` runs them TWICE (once in `R CMD build`, then again
           # re-building vignette outputs).  That is the workload that gets a
           # hosted runner reclaimed mid-job ("exit code 143").
-          - {os: macos-latest,   r: 'release', vignetteFits: 'false'}
-          # windows-latest is ALLOWED TO FAIL and is here as a signal, not a
-          # gate.  src/Makevars.win.in links -ltorch -ltorch_cpu -lc10 directly
-          # against the libtorch the R 'torch' package ships, which is built
-          # with MSVC, while Rtools compiles with MinGW g++: the C++ symbol
-          # mangling differs and there are no import libraries.  configure.win
-          # only checks that lib/torch.dll EXISTS, so it passes and the failure
-          # lands at link time.  Flip this to a gate once a Windows build is
-          # confirmed locally.
-          - {os: windows-latest, r: 'release', vignetteFits: 'false', allowFailure: true}
+          #
+          # BACKENDS.  ubuntu-release builds against libtorch; every other row
+          # builds the self-contained Adam/SGD fallback.  Both paths are real
+          # and both are gates.  Windows in particular builds the fallback by
+          # default (configure.win explains why the MSVC-built libtorch cannot
+          # be linked by MinGW), which is what makes a working Windows binary --
+          # and so a CRAN submission -- possible.
+          # macOS resolves binaries from CRAN, and CRAN's R-4.6 arm64 repo
+          # (bin/macosx/sonoma-arm64/contrib/4.6) now serves ZSTD-compressed
+          # .tgz files, which pak 0.11.1 cannot unpack: "Cannot extract
+          # knitr_1.52.tgz, unknown archive type", failing before this package
+          # is even built.  Verified by hand: that CRAN file is Zstandard, while
+          # the same package from P3M is gzip.  `use-public-rspm` only redirects
+          # Linux, so P3M is added explicitly here.  Drop this once CRAN's
+          # macOS binaries are readable by the pak the runners install.
+          - {os: macos-latest,   r: 'release', vignetteFits: 'false',
+             extraRepos: 'https://packagemanager.posit.co/cran/latest'}
+          - {os: windows-latest, r: 'release', vignetteFits: 'false'}
           - {os: ubuntu-latest,  r: 'devel', http-user-agent: 'release', vignetteFits: 'false'}
           - {os: ubuntu-latest,  r: 'oldrel-1', vignetteFits: 'false'}
-          - {os: ubuntu-latest,  r: 'release'}
+          - {os: ubuntu-latest,  r: 'release', backend: 'torch'}
 
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
-      # Covers any path that loads torch before the explicit install step.
-      TORCH_INSTALL: 1
+      # Covers any path that loads torch before the explicit install step -- and
+      # stays off for the builtin rows, which must not fetch libtorch at all.
+      TORCH_INSTALL: ${{ matrix.config.backend == 'torch' && '1' || '0' }}
       # Only ubuntu-release runs the vignette fits; see the matrix comment.
       NLMIXR2NN_VIGNETTE_FITS: ${{ matrix.config.vignetteFits || 'true' }}
-      # NB: TORCH_HOME cannot be set here -- the `runner` context is not
-      # available in a job-level `env:` block, and using it rejects the whole
-      # workflow file before any step runs.  It is exported in the first step.
+      # Pin the backend rather than letting configure auto-detect, so a row that
+      # is supposed to test libtorch FAILS when libtorch is missing instead of
+      # quietly falling back and reporting green for the wrong thing.
+      NLMIXR2NN_BACKEND: ${{ matrix.config.backend || 'builtin' }}
+      # NB: TORCH_HOME is deliberately NOT set.  Pointing it at a scratch
+      # directory to keep the ~2GB libtorch out of the cached R library looks
+      # tidy and does not work: torch's inst_path() REFUSES any TORCH_HOME that
+      # is not one of the R library paths ("torch cannot write into configured
+      # TORCH_HOME", measured on every runner).  libtorch therefore lives in
+      # torch's own package directory, inside the dependency cache.  That is
+      # affordable because only the one `backend: torch` row installs it -- the
+      # rest build the builtin optimizer and never download anything.
 
     steps:
-      - name: Point TORCH_HOME outside the R library
-        # torch installs libtorch into its own package directory by default,
-        # which setup-r-dependencies caches -- that is ~1-2GB per matrix entry
-        # against a 10GB per-repo cache limit, so it would evict every other
-        # cache (and can restore a half-written libtorch).  TORCH_HOME is what
-        # torch::torch_install_path() reports, which is what ./configure asks.
-        run: echo "TORCH_HOME=${{ runner.temp }}/torch" >> $GITHUB_ENV
-        shell: bash
-
       - uses: actions/checkout@v4
 
       - uses: r-lib/actions/setup-pandoc@v2
@@ -81,6 +87,8 @@ jobs:
           r-version: ${{ matrix.config.r }}
           http-user-agent: ${{ matrix.config.http-user-agent }}
           use-public-rspm: true
+          # Empty for every row but macOS -- see the matrix comment.
+          extra-repositories: ${{ matrix.config.extraRepos || '' }}
 
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
@@ -104,13 +112,8 @@ jobs:
             rstan=?ignore
           needs: check
 
-      - name: Cache libtorch
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/torch
-          key: libtorch-${{ runner.os }}-1
-
       - name: Install libtorch
+        if: matrix.config.backend == 'torch'
         # nlmixr2nn LINKS libtorch, and ./configure looks for it, so the
         # binaries must exist before R CMD build/INSTALL runs -- not merely
         # before the tests.  Without this the build fails in configure with
