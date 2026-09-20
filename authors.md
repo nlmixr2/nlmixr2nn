@@ -7,7 +7,7 @@
 ## Citation
 
 Source:
-[`DESCRIPTION`](https://github.com/nlmixr2/nlmixr2nn/blob/master/DESCRIPTION)
+[`DESCRIPTION`](https://github.com/nlmixr2/nlmixr2nn/blob/main/DESCRIPTION)
 
 Fidler M (2026). *nlmixr2nn: Neural-Network ODEs for 'rxode2' and
 'nlmixr2'*. R package version 0.0.0.9000,
