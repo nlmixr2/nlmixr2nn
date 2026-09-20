@@ -8,6 +8,9 @@
 [![R-CMD-check](https://github.com/nlmixr2/nlmixr2nn/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/nlmixr2/nlmixr2nn/actions/workflows/R-CMD-check.yaml)
 [![Codecov test
 coverage](https://codecov.io/gh/nlmixr2/nlmixr2nn/graph/badge.svg)](https://app.codecov.io/gh/nlmixr2/nlmixr2nn)
+[![CRAN
+version](https://www.r-pkg.org/badges/version/nlmixr2nn)](https://cran.r-project.org/package=nlmixr2nn)
+![r-universe](https://nlmixr2.r-universe.dev/badges/nlmixr2nn)
 <!-- badges: end -->
 
 `nlmixr2nn` puts neural networks inside `rxode2` and `nlmixr2` models.
